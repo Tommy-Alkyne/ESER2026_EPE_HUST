@@ -99,3 +99,7 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+#downloaded dataset and pretrained models
+dataset/
+experiments/
