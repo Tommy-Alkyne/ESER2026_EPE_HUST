@@ -101,5 +101,7 @@ ENV/
 .mypy_cache/
 
 #downloaded dataset and pretrained models
-dataset/
-experiments/
+dataset/*
+!dataset/.gitkeep
+experiments/*
+!experiments/.gitkeep
