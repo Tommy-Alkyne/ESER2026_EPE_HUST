@@ -1,4 +1,5 @@
-# Bayesian Surrogate as Image-to-Image Regression
+# ESER2026_EPE_HUST 新生小队(?)节能减排
+原标题: Bayesian Surrogate as Image-to-Image Regression
 
 [Bayesian Deep Convolutional Encoder-Decoder Networks for Surrogate Modeling and Uncertainty Quantification](https://doi.org/10.1016/j.jcp.2018.04.018)
 
