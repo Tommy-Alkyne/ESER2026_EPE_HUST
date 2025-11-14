@@ -34,7 +34,7 @@ if args.ckpt_epoch is not None:
     checkpoint = args.ckpt_dir + '/model_epoch{}.pth'.format(args.ckpt_epoch)
 else:
     checkpoint = args.ckpt_dir + '/model_epoch{}.pth'.format(args.epochs)
-bayes_nn.load_state_dict(torch.load(checkpoint))
+bayes_nn.load_state_dict(torch.load(checkpoint,map_location=device))
 print('Loaded pre-trained model: {}'.format(checkpoint))
 
 # load Monte Carlo data
