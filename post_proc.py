@@ -43,10 +43,10 @@ mc_loader, _ = load_data(mc_data_dir, args.mc_batch_size)
 print('Loaded Monte Carlo data!')
 
 # Now performs UQ tasks
-# uq = UQ(bayes_nn, mc_loader)
+uq = UQ(bayes_nn, mc_loader)
 
-# with torch.no_grad():
-#     uq.plot_prediction_at_x(n_pred=10)
-#     uq.propagate_uncertainty()
-#     uq.plot_dist(num_loc=20)
-#     uq.plot_reliability_diagram()
+with torch.no_grad():
+    uq.plot_prediction_at_x(n_pred=10)
+    uq.propagate_uncertainty()
+    uq.plot_dist(num_loc=20)
+    uq.plot_reliability_diagram()
