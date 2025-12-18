@@ -36,3 +36,13 @@ def load_data(data_dir, batch_size):
     stats['y_var'] = y_data_var
 
     return data_loader, stats
+
+if __name__ == "__main__":
+    dir = '/home/tommy/code/ESER2026_EPE_HUST/dataset/kle4225_lhs128.hdf5'
+    size = 16
+    data_loader,stats = load_data(dir,size)
+    print("\n统计信息:")
+    # print(f"y_mean 形状: {stats['y_mean'].shape}")
+    # print(f"y_mean 前5个值: {stats['y_mean'][:5]}")
+    # print(f"y_var 值: {stats['y_var']}")
+    print(stats)
