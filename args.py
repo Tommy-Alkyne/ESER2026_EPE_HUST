@@ -85,6 +85,8 @@ class Parser(argparse.ArgumentParser):
 
         return args
 
+#为了在jupyter里import args而不是报错
+#if __name__ == "__main__":
 # global
-args = Parser().parse()
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    args = Parser().parse()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
