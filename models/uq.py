@@ -6,7 +6,10 @@ import scipy.io
 from scipy.stats import norm as scipy_norm
 import seaborn as sns
 from utils.misc import mkdir
-from utils.plot import plot_prediction_bayes, plot_MC
+if getattr(args, 'ndim', 2) == 3:
+    from utils.plot_3d import plot_prediction_bayes, plot_MC
+else:
+    from utils.plot import plot_prediction_bayes, plot_MC
 from utils.lhs import lhs
 from args import args, device
 plt.switch_backend('agg')
@@ -85,12 +88,20 @@ class UQ(object):
         stats_x = torch.stack((sample_mean_x, sample_var_x)).cpu().numpy()
         fig, _ = plt.subplots(1, 2)
         for i, ax in enumerate(fig.axes):
-            # ax.set_title(titles[i])
             ax.set_aspect('equal')
             ax.set_axis_off()
-            # im = ax.imshow(stats_x[i].squeeze(0),
-            #                interpolation='bilinear', cmap=self.args.cmap)
-            im = ax.contourf(stats_x[i].squeeze(0), 50, cmap='jet')
+            # choose 2D slice if data is 3D
+            if getattr(args, 'ndim', 2) == 3:
+                # stats_x[i] shape: (C, D, H, W)
+                arr = stats_x[i]
+                d = arr.shape[1] // 2
+                if arr.shape[0] == 1:
+                    slice2d = arr[0, d]
+                else:
+                    slice2d = arr[0, d]
+                im = ax.contourf(slice2d, 50, cmap='jet')
+            else:
+                im = ax.contourf(stats_x[i].squeeze(0), 50, cmap='jet')
             for c in im.collections:
                 c.set_edgecolor("face")
                 c.set_linewidth(0.000000000001)

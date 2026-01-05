@@ -11,7 +11,7 @@ logger['r2_test'] = []
 logger['mnlp_test'] = []
 logger['log_beta'] = []
 
-
+#下面这俩是创建文件夹
 def mkdir(path):
     if not os.path.exists(path):
         os.makedirs(path)

@@ -27,6 +27,9 @@ class Parser(argparse.ArgumentParser):
         self.add_argument('--kle', type=int, default=4225, help='num of KLE terms')
         self.add_argument('--ntrain', type=int, default=512, help="number of training data")
         self.add_argument('--ntest', type=int, default=500, help="number of test data") 
+        # optional override files
+        self.add_argument('--train-file', type=str, default=None, help='optional path to training hdf5 file')
+        self.add_argument('--test-file', type=str, default=None, help='optional path to testing hdf5 file')
 
         # training
         self.add_argument('--epochs', type=int, default=200, help='number of epochs to train (default: 200)')

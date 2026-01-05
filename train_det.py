@@ -8,11 +8,36 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
-from args_det import args, device
-from models.dense_ed import DenseED
-from utils.load_data import load_data
+import sys
+import os
+
+# choose args module based on command-line flag --ndim 3 or --use-3d
+use_3d = False
+if '--ndim' in sys.argv:
+    try:
+        idx = sys.argv.index('--ndim')
+        if sys.argv[idx + 1] == '3':
+            use_3d = True
+    except Exception:
+        pass
+if '--use-3d' in sys.argv:
+    use_3d = True
+
+if use_3d:
+    from args_det_3d import args, device
+else:
+    from args_det import args, device
 from utils.misc import mkdirs
-from utils.plot import plot_prediction_det, save_stats
+
+# choose 2D/3D implementations depending on args.ndim (default 2)
+if getattr(args, 'ndim', 2) == 3:
+    from models.dense_ed_3d import DenseED as DenseED
+    from utils.load_data_3d import load_data
+    from utils.plot_3d import plot_prediction_det, save_stats
+else:
+    from models.dense_ed import DenseED
+    from utils.load_data import load_data
+    from utils.plot import plot_prediction_det, save_stats
 import json
 from time import time
 
@@ -21,7 +46,7 @@ args.pred_dir = args.train_dir + "/predictions"
 mkdirs([args.train_dir, args.pred_dir])
 
 # initialize model
-model = DenseED(in_channels=1, out_channels=3, 
+model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=getattr(args, 'noc', 3), 
                 blocks=args.blocks,
                 growth_rate=args.growth_rate, 
                 init_features=args.init_features,
@@ -41,8 +66,48 @@ if args.post:
     print('Loaded pre-trained model: {}'.format(checkpoint))
 
 # load data
-train_data_dir = args.data_dir + '/kle{}_lhs{}.hdf5'.format(args.kle, args.ntrain)
-test_data_dir = args.data_dir + '/kle{}_mc{}.hdf5'.format(args.kle, args.ntest)
+# allow overriding train/test files via command-line --train-file / --test-file
+train_file = None
+test_file = None
+if '--train-file' in sys.argv:
+    try:
+        train_file = sys.argv[sys.argv.index('--train-file') + 1]
+    except Exception:
+        train_file = None
+if '--test-file' in sys.argv:
+    try:
+        test_file = sys.argv[sys.argv.index('--test-file') + 1]
+    except Exception:
+        test_file = None
+
+if train_file is not None:
+    # If user passed an absolute path, use it. If user passed a relative path
+    # that contains a directory component (e.g. 'dataset/10243d.hdf5'),
+    # assume they intended that relative path and use it as-is. Only join
+    # with args.data_dir when the user provided a bare filename.
+    if os.path.isabs(train_file):
+        train_data_dir = train_file
+    elif os.path.dirname(train_file):
+        train_data_dir = train_file
+    else:
+        train_data_dir = os.path.join(args.data_dir, train_file)
+elif getattr(args, 'ndim', 2) == 3:
+    train_data_dir = os.path.join(args.data_dir, '10243d.hdf5')
+else:
+    train_data_dir = args.data_dir + '/kle{}_lhs{}.hdf5'.format(args.kle, args.ntrain)
+
+if test_file is not None:
+    if os.path.isabs(test_file):
+        test_data_dir = test_file
+    elif os.path.dirname(test_file):
+        test_data_dir = test_file
+    else:
+        test_data_dir = os.path.join(args.data_dir, test_file)
+elif getattr(args, 'ndim', 2) == 3:
+    test_data_dir = train_data_dir
+else:
+    test_data_dir = args.data_dir + '/kle{}_mc{}.hdf5'.format(args.kle, args.ntest)
+
 train_loader, train_stats = load_data(train_data_dir, args.batch_size)
 test_loader, test_stats = load_data(test_data_dir, args.test_batch_size)
 print('Loaded data!')

@@ -7,12 +7,19 @@ import torch
 import numpy as np
 from time import time
 from args import args, device
-from models.dense_ed import DenseED
+from utils.misc import mkdirs, logger
+
+# choose 2D/3D implementations depending on args.ndim (default 2)
+if getattr(args, 'ndim', 2) == 3:
+    from models.dense_ed_3d import DenseED as DenseED
+    from utils.load_data_3d import load_data
+    from utils.plot_3d import plot_prediction_bayes, save_stats
+else:
+    from models.dense_ed import DenseED
+    from utils.load_data import load_data
+    from utils.plot import plot_prediction_bayes, save_stats
 from models.bayes_nn import BayesNN
 from models.svgd import SVGD
-from utils.load_data import load_data
-from utils.misc import mkdirs, logger
-from utils.plot import plot_prediction_bayes, save_stats
 import json
 
 
@@ -21,8 +28,8 @@ args.pred_dir = args.train_dir + "/predictions"
 mkdirs([args.train_dir, args.pred_dir])
 
 # deterministic NN
-dense_ed = DenseED(in_channels=args.nic, 
-                    out_channels=args.noc, 
+dense_ed = DenseED(in_channels=getattr(args, 'nic', 1), 
+                    out_channels=getattr(args, 'noc', 3), 
                     blocks=args.blocks,
                     growth_rate=args.growth_rate, 
                     init_features=args.init_features,

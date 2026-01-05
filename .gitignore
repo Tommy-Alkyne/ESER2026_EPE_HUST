@@ -105,3 +105,6 @@ dataset/*
 !dataset/.gitkeep
 experiments/*
 !experiments/.gitkeep
+
+#vscode settings
+.vscode/

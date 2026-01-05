@@ -185,8 +185,10 @@ class BayesNN(nn.Module):
         """
         # S x N x oC x oH x oW
         output = self.forward(input)
-        # S x 1 x 1 x 1 x 1
-        log_beta = self.log_beta.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        # expand log_beta to S x 1 x 1 x ... matching target spatial dims
+        log_beta = self.log_beta
+        for _ in range(target.dim() - 1):
+            log_beta = log_beta.unsqueeze(-1)
         log_2pi_S = torch.tensor(0.5 * target[0].numel() * math.log(2 * math.pi)
                        + math.log(self.n_samples), device=device)
         # S x N
@@ -264,9 +266,12 @@ class BayesNN(nn.Module):
         cond_Eyy /= len(mc_loader)
         beta_inv = (- self.log_beta).exp()
         print('Noise variances: {}'.format(beta_inv))
-        
-        y_cond_pred_var = cond_Eyy - cond_Ey ** 2 \
-                     + beta_inv.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        # expand beta_inv to match conditional output dims
+        beta_exp = beta_inv
+        for _ in range(len(output_size)):
+            beta_exp = beta_exp.unsqueeze(-1)
+
+        y_cond_pred_var = cond_Eyy - cond_Ey ** 2 + beta_exp
 
         # compute statistics of conditional statistics
         return cond_Ey.mean(0), cond_Ey.var(0), \

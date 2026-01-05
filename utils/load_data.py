@@ -42,7 +42,7 @@ if __name__ == "__main__":
     size = 16
     data_loader,stats = load_data(dir,size)
     print("\n统计信息:")
-    # print(f"y_mean 形状: {stats['y_mean'].shape}")
-    # print(f"y_mean 前5个值: {stats['y_mean'][:5]}")
-    # print(f"y_var 值: {stats['y_var']}")
-    print(stats)
+    print(f"y_mean 形状: {stats['y_mean'].shape}")
+    #print(f"y_mean 前5个值: {stats['y_mean'][:5]}")
+    print(f"y_var 值: {stats['y_var']}")
+    #print(stats)

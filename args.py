@@ -34,7 +34,8 @@ class Parser(argparse.ArgumentParser):
         ## more details on dataset
         self.add_argument('--nic', type=int, default=1, help="number of input channels")
         self.add_argument('--noc', type=int, default=3, help="number of output channels")
-        self.add_argument('--image-size', type=int, default=[65, 65], help="image resolution")
+        self.add_argument('--ndim', type=int, choices=[2, 3], default=2, help='data dimensionality: 2 or 3')
+        self.add_argument('--image-size', nargs='+', type=int, default=[65, 65], help="image resolution, provide 2 ints for 2D or 3 ints for 3D (D H W)")
         
         # training
         self.add_argument('--epochs', type=int, default=300, help='number of epochs to train')
@@ -60,6 +61,14 @@ class Parser(argparse.ArgumentParser):
             + '/kle{}/nsamples{}_ntrain{}_batch{}_lr{}_noiselr{}_epochs{}'.format(
                 args.kle, args.n_samples, args.ntrain, args.batch_size, args.lr,
                 args.lr_noise, args.epochs)
+
+        # validate image size vs ndim
+        if not hasattr(args, 'image_size'):
+            args.image_size = []
+        if isinstance(args.image_size, int):
+            args.image_size = [args.image_size]
+        if len(args.image_size) != args.ndim:
+            raise ValueError('`--image-size` length must match `--ndim` ({} vs {})'.format(len(args.image_size), args.ndim))
 
         args.ckpt_dir = args.run_dir + '/checkpoints'
         mkdirs([args.run_dir, args.ckpt_dir])
@@ -88,5 +97,5 @@ class Parser(argparse.ArgumentParser):
 #为了在jupyter里import args而不是报错
 #if __name__ == "__main__":
 # global
-    args = Parser().parse()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+args = Parser().parse()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -5,10 +5,15 @@ Bayesian NNs.
 
 import torch
 from args import args
-from models.dense_ed import DenseED
 from models.bayes_nn import BayesNN
 from models.uq import UQ
-from utils.load_data import load_data
+# choose 2D/3D model and loader
+if getattr(args, 'ndim', 2) == 3:
+    from models.dense_ed_3d import DenseED as DenseED
+    from utils.load_data_3d import load_data
+else:
+    from models.dense_ed import DenseED
+    from utils.load_data import load_data
 
 
 assert args.post, 'Add --post flag in command line for post-proc UQ tasks'
