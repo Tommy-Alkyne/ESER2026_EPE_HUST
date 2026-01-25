@@ -1,14 +1,59 @@
-# ESER2026_EPE_HUST 新生小队(?)节能减排
-原标题: Bayesian Surrogate as Image-to-Image Regression
+# README 中文更新
 
-[Bayesian Deep Convolutional Encoder-Decoder Networks for Surrogate Modeling and Uncertainty Quantification](https://doi.org/10.1016/j.jcp.2018.04.018)
+## Prediction 预测
+用来指定模型.pth文件和数据.hdf5文件来预测的脚本. 使用的是`surrogate_predict.py`
+### 参数
+--ckpt-file 使用的模型pth文件的路径 例: `--ckpt-file './experiments/2dtest_1024/kle4225/ntrain1024_blocks[3, 6, 3]_growth16_nif48_drop0.0_batch16_lr0.003_wd0.0005_epochs150/checkpoints/model_epoch100.pth'` 注意, 如果路径中有中括号`[`等特殊字符需要用单引号`'`把文件路径括起来. 会有中括号是因为默认的保存命名方式如此
 
-Yinhao Zhu, [Nicholas Zabaras](https://www.zabaras.com)
+--data-file 用来预测的hd5文件的路径 例: `--data-file './dataset/kle4225_lhs1024.hdf5'` 
 
-PyTorch Implementation of Bayesian surrogate modeling 
-for PDEs with high-dimensional stochstic input, such as permeability field, 
-Young's modulus, etc.
+--ndim 选择3D还是2D, 如果留空会自动检测 例: `--ndim 2`
 
+--out-file 指定的输出文件的路径 例: `--out-file ./dataset/prediction/2d_epoch100_1024.hdf5` 如果dataset文件夹里没有prediction文件夹需要提前创建
+
+其他的参数可以通过`python3 surrogate_predict.py --help`查看
+### 例子
+
+```bash
+python3 surrogate_predict.py --ckpt-file './experiments/2dtest_1024/kle4225/ntrain1024_blocks[3, 6, 3]_growth16_nif48_drop0.0_batch16_lr0.003_wd0.0005_epochs150/checkpoints/model_epoch100.pth' --data-file './dataset/kle4225_lhs1024.hdf5' --ndim 2 --out-file ./dataset/prediction/2d_epoch100_1024.hdf5
+```
+## Train 训练
+训练用来生成.pth的模型文件. 使用的是`train_det.py`和`train_svgd.py`
+### 参数
+--exp-name 训练实验的名字 例: `--exp-name 2dtest_1024` 会在experiments文件夹下生成一个2dtest_1024的文件夹用来保存训练结果
+
+--kle 选择KLE50, KLE500, KLE4225数据集 例: `--kle 4225` 对于作者给出的数据集, 只有4225. 后面可能会改命名规范, 可能会改
+
+--ntrain 选择训练数据的数量 例: `--ntrain 1024` 就是hdf5里4225后面那个数
+
+--ndim 选择3D还是2D 如果留空默认2D. 例: `--ndim 3`
+
+--epochs 训练的轮数 例: `--epochs 150`
+
+--ckpt-freq 多久保存一次模型 例: `--ckpt-freq 50` 就是每50轮保存一次
+
+--plot-freq 多久保存一次画预测图的曲线 例: `--plot-freq 50` 就是每50轮保存一次
+
+--train-file 指定训练数据的hdf5文件路径 例: `--train-file './dataset/10243d.hdf5'` **注意: 如果使用此参数会覆盖--kle 和--ntrain 对训练数据的选择. 如果不使用此参数则默认选择--kle 和--ntrain所指定的数据**
+
+--test-file 指定测试数据的hdf5文件路径 例: `--test-file './dataset/10243d.hdf5'` **注意: 如果使用此参数会覆盖默认的测试数据. 如果不使用此参数则默认选择--kle 和--ntrain所指定的数据**
+
+其他的参数可以通过`python3 train_det.py --help`查看
+
+### 例子
+**2D情况**
+```bash
+ python3 train_det.py --exp-name 2dtest_1024 --epochs 150 --ckpt-freq 50 --plot-freq 50 --ntrain 1024
+```
+这个例子表示使用1024个训练数据 (选择kle4225_lhs1024.hdf5 作为训练数据), 训练150轮, 每50轮保存一次模型和画图. 结果会保存在`./experiments/2dtest_1024/`文件夹下. 没有指定--kle和--ndim, 默认是4225和2D
+
+**3D例子**
+```bash
+ python3 train_det.py --exp-name 3dtest_1024 --ndim 3 --epochs 150 --ckpt-freq 50 --plot-freq 50 --train-file './dataset/10243d.hdf5' --test-file './dataset/10243d.hdf5'
+```
+这个例子表示使用1024个训练数据 (选择`10243d.hdf5` 作为训练数据), 训练150轮, 每50轮保存一次模型和画图. 结果会保存在`./experiments/3dtest_1024/`文件夹下
+
+# 原README
 KLE4225 (No dim reduction) | KLE500 | KLE50
 :-----:|:------:|:-----:
 ![](images/kle4225_pred_at_x_312_n512.png?raw=true) | ![](images/kle500_pred_at_x_293_n256.png?raw=true) | ![](images/kle50_pred_at_x_47_n128.png?raw=true)
@@ -35,7 +80,6 @@ The four rows in each image from top to bottom show: (1) simulator output,
 git clone https://github.com/cics-nd/cnn-surrogate.git
 cd cnn-surrogate
 ```
-1111111
 
 ## Dataset
 Download Darcy flow simulation dataset with input Gaussian random field (with 
@@ -59,7 +103,6 @@ Number of Monte Carlo sampling data: 10,000.
 KLE4225 | KLE500 | KLE50
 :-----:|:------:|:-----:
 ![](images/kle4225_data_312.png?raw=true) | ![](images/kle500_data_293.png?raw=true) | ![](images/kle50_data_47.png?raw=true)
-
 
 
 ## Start with a Pre-trained Model
