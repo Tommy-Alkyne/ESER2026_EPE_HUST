@@ -5,13 +5,13 @@ import matplotlib.ticker as ticker
 import scipy.io
 from scipy.stats import norm as scipy_norm
 import seaborn as sns
+from args import args, device
 from utils.misc import mkdir
 if getattr(args, 'ndim', 2) == 3:
     from utils.plot_3d import plot_prediction_bayes, plot_MC
 else:
     from utils.plot import plot_prediction_bayes, plot_MC
 from utils.lhs import lhs
-from args import args, device
 plt.switch_backend('agg')
 
 assert args.post, 'Add --post flag in command line for post-proc tasks, e.g. UQ.'

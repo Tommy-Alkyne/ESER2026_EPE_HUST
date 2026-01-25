@@ -126,8 +126,9 @@ logger['rmse_train'] = []
 logger['rmse_test'] = []
 logger['r2_train'] = []
 logger['r2_test'] = []
+logger['time'] = []
 
-def test(epoch):
+def test(epoch):#epoch is a number
     model.eval()
     mse = 0.
     for batch_idx, (input, target) in enumerate(test_loader):
@@ -181,15 +182,23 @@ def train(epoch):
 
 print('Start training........................................................')
 tic = time()
-for epoch in range(1, args.epochs + 1):
-    train(epoch)
+if args.post:
+    print("In post-processing mode, skipping training.")
     with torch.no_grad():
-        test(epoch)
-tic2 = time()
-print("Finished training {} epochs with {} data using {} seconds (including long... plotting time)"
-      .format(args.epochs, args.ntrain, tic2 - tic))
+        test(args.ckpt_epoch if args.ckpt_epoch is not None else args.epochs)
+    tic2 = time()
+    print("Finished testing using pre-trained model in {} seconds".format(tic2 - tic))
+else:
+    for epoch in range(1, args.epochs + 1):
+        train(epoch)
+        with torch.no_grad():
+            test(epoch)
+    tic2 = time()
+    print("Finished training {} epochs with {} data using {} seconds (including long... plotting time)"
+        .format(args.epochs, args.ntrain, tic2 - tic))
 
 x_axis = np.arange(args.log_freq, args.epochs + args.log_freq, args.log_freq)
+logger['time'].append(tic2 - tic)
 # plot the rmse, r2-score curve and save them in txt
 save_stats(args.train_dir, logger, x_axis)
 
