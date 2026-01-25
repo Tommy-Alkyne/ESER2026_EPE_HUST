@@ -108,3 +108,6 @@ experiments/*
 
 #vscode settings
 .vscode/
+
+#jupyter notebooks
+*.ipynb
