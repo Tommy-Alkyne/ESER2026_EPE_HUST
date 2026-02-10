@@ -83,6 +83,7 @@ def _build_model(args, device):
 		bn_size=args.bn_size,
 		bottleneck=args.bottleneck,
 		out_activation=None,
+		output_size=getattr(args, 'output_size', None) if args.ndim == 3 else None,
 	).to(device)
 	return model
 
@@ -93,7 +94,8 @@ def _load_data(args):
 		from utils.load_data_3d import load_data
 	else:
 		from utils.load_data import load_data
-	loader, stats = load_data(args.data_file, args.batch_size)
+	loader, stats = load_data(args.data_file, args.batch_size,input_key=None, prefer_sensor_input=True,
+              align_input_to_output=True,shuff=False)
 	return loader, stats
 
 
@@ -112,15 +114,28 @@ def main():
 	else:
 		device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+	# Load checkpoint state early to align channels
+	state = torch.load(args.ckpt_file, map_location=device)
+	if 'features.LastTransUp.conv2.weight' in state:
+		args.noc = state['features.LastTransUp.conv2.weight'].shape[0]
+	elif 'features.LastTransUp.convT2.weight' in state:
+		args.noc = state['features.LastTransUp.convT2.weight'].shape[1]
+	if 'features.In_conv.weight' in state:
+		args.nic = state['features.In_conv.weight'].shape[1]
+
 	# Load data
 	loader, stats = _load_data(args)
 	n_total = len(loader.dataset)
 	if args.limit is not None:
 		n_total = min(n_total, args.limit)
 
+	# Align output size for 3D to match targets
+	if args.ndim == 3:
+		_, sample_y = loader.dataset[0]
+		args.output_size = tuple(sample_y.shape[-3:])
+
 	# Build and load model
 	model = _build_model(args, device)
-	state = torch.load(args.ckpt_file, map_location=device)
 	model.load_state_dict(state)
 	model.eval()
 
@@ -143,6 +158,17 @@ def main():
 			end = min(idx_write + bs, n_total)
 			preds[idx_write:end] = y_pred[:(end - idx_write)]
 			idx_write = end
+
+	# Apply T-mask: zero-out regions outside the two rectangles
+	if preds.ndim in (4, 5):
+		h, w = preds.shape[-2:]
+		mask = np.zeros((h, w), dtype=bool)
+		mask[0:136, 0:35] = True
+		mask[51:87, 35:137] = True
+		if preds.ndim == 4:
+			preds[..., ~mask] = 0.0
+		else:
+			preds[..., :, ~mask] = 0.0
 
 	# Determine output file path
 	if args.out_file is None:

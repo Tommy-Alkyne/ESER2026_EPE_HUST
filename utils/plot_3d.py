@@ -19,52 +19,70 @@ def plot_prediction_det(save_dir, target, prediction, epoch, index,
     """
     target, prediction = to_numpy(target), to_numpy(prediction)
 
-    # If data has shape (C, D, H, W) with D==1, squeeze depth dimension
-    def _squeeze_depth(x):
+    # If data has shape (C, D, H, W), select the middle depth slice.
+    # Odd D: middle; Even D: upper of the two middle slices (index D//2).
+    def _select_middle_depth(x):
         if x is None:
             return x
-        if x.ndim == 4 and x.shape[1] == 1:
-            return x[:, 0, :, :]
+        if x.ndim == 4:
+            C, D, H, W = x.shape
+            if D == 1:
+                return x[:, 0, :, :]
+            idx = D // 2
+            return x[:, idx, :, :]
         return x
 
-    target = _squeeze_depth(target)
-    prediction = _squeeze_depth(prediction)
+    target = _select_middle_depth(target)
+    prediction = _select_middle_depth(prediction)
 
-    # 9 x H x W (C*3 x H x W)
-    samples = np.concatenate((target, prediction, target - prediction), axis=0)
-    vmin = [np.amin(samples[[0, 3]]), np.amin(samples[[1, 4]]),
-            np.amin(samples[[2, 5]])]
-    vmax = [np.amax(samples[[0, 3]]), np.amax(samples[[1, 4]]),
-            np.amax(samples[[2, 5]])]
+    c = target.shape[0]
+    vmin = []
+    vmax = []
+    for i in range(c):
+        channel = np.concatenate((target[i], prediction[i]), axis=None)
+        vmin.append(np.amin(channel))
+        vmax.append(np.amax(channel))
 
-    fig, _ = plt.subplots(3, 3, figsize=(11, 9))
-    for j, ax in enumerate(fig.axes):
-        ax.set_aspect('equal')
-        ax.set_axis_off()
-        if j < 6:
+    fig, axes = plt.subplots(3, c, figsize=(4 * c, 9))
+    if c == 1:
+        axes = np.array(axes).reshape(3, 1)
+
+    for i in range(c):
+        for r in range(3):
+            ax = axes[r, i]
+            ax.set_aspect('equal')
+            ax.set_axis_off()
+            if r == 0:
+                data = target[i]
+            elif r == 1:
+                data = prediction[i]
+            else:
+                data = target[i] - prediction[i]
+
+            if r < 2:
+                if plot_fn == 'contourf':
+                    cax = ax.contourf(data, 50, cmap='jet',
+                                      vmin=vmin[i], vmax=vmax[i])
+                elif plot_fn == 'imshow':
+                    cax = ax.imshow(data, cmap='jet', origin='lower',
+                                    interpolation='bilinear',
+                                    vmin=vmin[i], vmax=vmax[i])
+            else:
+                if plot_fn == 'contourf':
+                    cax = ax.contourf(data, 50, cmap='jet')
+                elif plot_fn == 'imshow':
+                    cax = ax.imshow(data, cmap='jet', origin='lower',
+                                    interpolation='bilinear')
+
             if plot_fn == 'contourf':
-                cax = ax.contourf(samples[j], 50, cmap='jet',
-                                  vmin=vmin[j % 3], vmax=vmax[j % 3])
-            elif plot_fn =='imshow':
-                cax = ax.imshow(samples[j], cmap='jet', origin='lower',
-                                interpolation='bilinear',
-                                vmin=vmin[j % 3], vmax=vmax[j % 3])   
-        else:
-            if plot_fn == 'contourf':
-                cax = ax.contourf(samples[j], 50, cmap='jet')
-            elif plot_fn =='imshow':
-                cax = ax.imshow(samples[j], cmap='jet', origin='lower',
-                                interpolation='bilinear')
-        if plot_fn == 'contourf':
-            for c in cax.collections:
-                c.set_edgecolor("face")
-                c.set_linewidth(0.000000000001)
-        cbar = plt.colorbar(cax, ax=ax, fraction=0.046, pad=0.04,
-                            format=ticker.ScalarFormatter(useMathText=True))
-        cbar.formatter.set_powerlimits((-2, 2))
-        cbar.ax.yaxis.set_offset_position('left')
-        # cbar.ax.tick_params(labelsize=5)
-        cbar.update_ticks()
+                for coll in cax.collections:
+                    coll.set_edgecolor("face")
+                    coll.set_linewidth(0.000000000001)
+            cbar = plt.colorbar(cax, ax=ax, fraction=0.046, pad=0.04,
+                                format=ticker.ScalarFormatter(useMathText=True))
+            cbar.formatter.set_powerlimits((-2, 2))
+            cbar.ax.yaxis.set_offset_position('left')
+            cbar.update_ticks()
     plt.tight_layout(pad=0.05, w_pad=0.05, h_pad=0.05)
     plt.savefig(save_dir + '/pred_epoch{}_{}.pdf'.format(epoch, index),
                 dpi=300, bbox_inches='tight')
@@ -141,16 +159,20 @@ def plot_prediction_bayes(save_dir, target, pred_mean, pred_var, epoch, index,
     """
     target, pred_mean, pred_var = to_numpy(target), to_numpy(pred_mean), to_numpy(pred_var)
 
-    def _squeeze_depth(x):
+    def _select_middle_depth(x):
         if x is None:
             return x
-        if x.ndim == 4 and x.shape[1] == 1:
-            return x[:, 0, :, :]
+        if x.ndim == 4:
+            C, D, H, W = x.shape
+            if D == 1:
+                return x[:, 0, :, :]
+            idx = D // 2
+            return x[:, idx, :, :]
         return x
 
-    target = _squeeze_depth(target)
-    pred_mean = _squeeze_depth(pred_mean)
-    pred_var = _squeeze_depth(pred_var)
+    target = _select_middle_depth(target)
+    pred_mean = _select_middle_depth(pred_mean)
+    pred_var = _select_middle_depth(pred_var)
 
     pred_error = target - pred_mean    
     two_sigma = np.sqrt(pred_var) * 2
@@ -251,16 +273,20 @@ def plot_MC(save_dir, monte_carlo, pred_mean, pred_var, mean, n_train):
     monte_carlo, pred_mean, pred_var = to_numpy(monte_carlo), \
                                        to_numpy(pred_mean), to_numpy(pred_var)
 
-    def _squeeze_depth(x):
+    def _select_middle_depth(x):
         if x is None:
             return x
-        if x.ndim == 4 and x.shape[1] == 1:
-            return x[:, 0, :, :]
+        if x.ndim == 4:
+            C, D, H, W = x.shape
+            if D == 1:
+                return x[:, 0, :, :]
+            idx = D // 2
+            return x[:, idx, :, :]
         return x
 
-    monte_carlo = _squeeze_depth(monte_carlo)
-    pred_mean = _squeeze_depth(pred_mean)
-    pred_var = _squeeze_depth(pred_var)
+    monte_carlo = _select_middle_depth(monte_carlo)
+    pred_mean = _select_middle_depth(pred_mean)
+    pred_var = _select_middle_depth(pred_var)
 
     two_sigma = 2 * np.sqrt(pred_var)
     # target: C x H x W

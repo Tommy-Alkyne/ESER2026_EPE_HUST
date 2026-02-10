@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
+import h5py
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
 import sys
@@ -44,17 +45,6 @@ from time import time
 args.train_dir = args.run_dir + "/training"
 args.pred_dir = args.train_dir + "/predictions"
 mkdirs([args.train_dir, args.pred_dir])
-
-# initialize model
-model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=getattr(args, 'noc', 3), 
-                blocks=args.blocks,
-                growth_rate=args.growth_rate, 
-                init_features=args.init_features,
-                drop_rate=args.drop_rate,
-                bn_size=args.bn_size,
-                bottleneck=args.bottleneck,
-                out_activation=None).to(device)
-print(model)
 
 # load checkpoint if in post mode
 if args.post:
@@ -108,6 +98,41 @@ elif getattr(args, 'ndim', 2) == 3:
 else:
     test_data_dir = args.data_dir + '/kle{}_mc{}.hdf5'.format(args.kle, args.ntest)
 
+# auto-detect channels and output size for 3D from training file
+if getattr(args, 'ndim', 2) == 3:
+    try:
+        with h5py.File(train_data_dir, 'r') as f:
+            y_shape = f['output'].shape
+            if len(y_shape) >= 5:
+                args.noc = y_shape[1]
+                args.image_size = list(y_shape[-3:])
+            elif len(y_shape) == 4:
+                args.noc = y_shape[1]
+                args.image_size = [1] + list(y_shape[-2:])
+
+            if 'sensor_input' in f:
+                x_shape = f['sensor_input'].shape
+            else:
+                x_shape = f['input'].shape
+            if len(x_shape) in [4, 5]:
+                args.nic = x_shape[1]
+            else:
+                args.nic = 1
+    except Exception as e:
+        print('Warning: failed to infer 3D data shapes from {}: {}'.format(train_data_dir, e))
+
+# initialize model
+model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=getattr(args, 'noc', 3), 
+                blocks=args.blocks,
+                growth_rate=args.growth_rate, 
+                init_features=args.init_features,
+                drop_rate=args.drop_rate,
+                bn_size=args.bn_size,
+                bottleneck=args.bottleneck,
+                out_activation=None,
+                output_size=tuple(getattr(args, 'image_size', [1, 65, 65])) if getattr(args, 'ndim', 2) == 3 else None).to(device)
+print(model)
+
 train_loader, train_stats = load_data(train_data_dir, args.batch_size)
 test_loader, test_stats = load_data(test_data_dir, args.test_batch_size)
 print('Loaded data!')
@@ -118,8 +143,8 @@ scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
                     verbose=True, threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
-n_out_pixels_train = args.ntrain * train_loader.dataset[0][1].numel()
-n_out_pixels_test = args.ntest * test_loader.dataset[0][1].numel()
+n_out_pixels_train = len(train_loader.dataset) * train_loader.dataset[0][1].numel()
+n_out_pixels_test = len(test_loader.dataset) * test_loader.dataset[0][1].numel()
 
 logger = {}
 logger['rmse_train'] = []
@@ -128,13 +153,38 @@ logger['r2_train'] = []
 logger['r2_test'] = []
 logger['time'] = []
 
+def _masked_mse_sum(output, target):
+    loss = F.mse_loss(
+        output[..., 0:136, 0:35],
+        target[..., 0:136, 0:35],
+        reduction='sum'
+    )
+    loss += F.mse_loss(
+        output[..., 51:87, 35:137],
+        target[..., 51:87, 35:137],
+        reduction='sum'
+    )
+    return loss
+
+def _masked_stats(y_tensor):
+    region1 = y_tensor[..., 0:136, 0:35]
+    region2 = y_tensor[..., 51:87, 35:137]
+    count = region1.numel() + region2.numel()
+    total_sum = region1.sum().item() + region2.sum().item()
+    total_sumsq = (region1 ** 2).sum().item() + (region2 ** 2).sum().item()
+    var = total_sumsq - (total_sum ** 2) / count
+    return count, var
+
+train_mask_count, train_y_var = _masked_stats(train_loader.dataset.tensors[1])
+test_mask_count, test_y_var = _masked_stats(test_loader.dataset.tensors[1])
+
 def test(epoch):#epoch is a number
     model.eval()
     mse = 0.
     for batch_idx, (input, target) in enumerate(test_loader):
         input, target = input.to(device), target.to(device)
         output = model(input)
-        mse += F.mse_loss(output, target, size_average=False).item()
+        mse += _masked_mse_sum(output, target).item()
 
         # plot predictions
         if epoch % args.plot_freq == 0 and batch_idx == 0:
@@ -148,8 +198,8 @@ def test(epoch):#epoch is a number
                 plot_prediction_det(args.pred_dir, samples_target[i], 
                     samples_output[i], epoch, i, plot_fn=args.plot_fn)
 
-    rmse_test = np.sqrt(mse / n_out_pixels_test)
-    r2_score = 1 - mse / test_stats['y_var']
+    rmse_test = np.sqrt(mse / test_mask_count)
+    r2_score = 1 - mse / test_y_var
     print("epoch: {}, test r2-score:  {:.6f}".format(epoch, r2_score))
 
     if epoch % args.log_freq == 0:
@@ -163,14 +213,14 @@ def train(epoch):
         input, target = input.to(device), target.to(device)
         model.zero_grad()
         output = model(input)
-        loss = F.mse_loss(output, target, size_average=False)
+        loss = _masked_mse_sum(output, target)
         loss.backward()
         optimizer.step()
         mse += loss.item()
 
-    rmse = np.sqrt(mse / n_out_pixels_train)
+    rmse = np.sqrt(mse / train_mask_count)
     scheduler.step(rmse)
-    r2_score = 1 - mse / train_stats['y_var']
+    r2_score = 1 - mse / train_y_var
     print("epoch: {}, training r2-score: {:.6f}".format(epoch, r2_score))
     if epoch % args.log_freq == 0:
         logger['r2_train'].append(r2_score)

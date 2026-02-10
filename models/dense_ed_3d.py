@@ -91,15 +91,19 @@ class _Transition3D(nn.Sequential):
 
                 self.add_module('norm2', nn.BatchNorm3d(out_features))
                 self.add_module('relu2', nn.ReLU(inplace=True))
-                self.add_module('convT2', nn.ConvTranspose3d(
-                    out_features, out_features, kernel_size=(1,3,3), stride=(1,2,2),
-                    padding=(0,1,1), output_padding=(0,1,1), bias=False))
+                self.add_module('upsample2', nn.Upsample(
+                    scale_factor=(1, 2, 2), mode='trilinear', align_corners=True))
+                self.add_module('conv2', nn.Conv3d(
+                    out_features, out_features, kernel_size=(1,3,3),
+                    stride=1, padding=(0,1,1), bias=False))
                 if drop_rate > 0:
                     self.add_module('dropout2', nn.Dropout3d(p=drop_rate))
             else:
-                self.add_module('convT1', nn.ConvTranspose3d(
-                    out_features, out_features, kernel_size=(1,3,3), stride=(1,2,2),
-                    padding=(0,1,1), output_padding=(0,1,1), bias=False))
+                self.add_module('upsample1', nn.Upsample(
+                    scale_factor=(1, 2, 2), mode='trilinear', align_corners=True))
+                self.add_module('conv1', nn.Conv3d(
+                    out_features, out_features, kernel_size=(1,3,3),
+                    stride=1, padding=(0,1,1), bias=False))
                 if drop_rate > 0:
                     self.add_module('dropout1', nn.Dropout3d(p=drop_rate))
 
@@ -124,16 +128,18 @@ def last_decoding(in_features, out_channels, kernel_size, stride, padding,
     s = _tuplize(stride)
     p = _tuplize(padding)
     op = _tuplize(output_padding)
-    last_up.add_module('convT2', nn.ConvTranspose3d(in_features // 2,
-                       out_channels, kernel_size=k, stride=s,
-                       padding=p, output_padding=op, bias=bias))
+    last_up.add_module('upsample2', nn.Upsample(
+        scale_factor=s, mode='trilinear', align_corners=True))
+    last_up.add_module('conv2', nn.Conv3d(
+        in_features // 2, out_channels, kernel_size=k,
+        stride=1, padding=p, bias=bias))
     return last_up
 
 
 class DenseED3D(nn.Module):
     def __init__(self, in_channels, out_channels, blocks, growth_rate=16,
                  init_features=48, bn_size=8, drop_rate=0, bottleneck=False,
-                 out_activation=None):
+                 out_activation=None, output_size=None):
         super(DenseED3D, self).__init__()
         if len(blocks) > 1 and len(blocks) % 2 == 0:
             raise ValueError('length of blocks must be an odd number, but got {}'
@@ -145,7 +151,7 @@ class DenseED3D(nn.Module):
 
         # First conv: keep depth kernel 1 so depth dimension unchanged
         self.features.add_module('In_conv', nn.Conv3d(in_channels, init_features,
-                              kernel_size=(1,7,7), stride=(1,2,2), padding=(0,2,2), bias=False))
+                      kernel_size=(1,7,7), stride=(1,2,2), padding=(0,2,2), bias=False))
         num_features = init_features
         for i, num_layers in enumerate(enc_block_layers):
             block = _DenseBlock3D(num_layers=num_layers,
@@ -193,11 +199,22 @@ class DenseED3D(nn.Module):
             elif out_activation in ['sigmoid', 'Sigmoid']:
                 self.features.add_module(out_activation, nn.Sigmoid())
 
+        # optionally align output size to target spatial size
+        self.output_size = output_size
+
         print('# params {}, # conv layers {}'.format(
             *self._num_parameters_convlayers()))
 
     def forward(self, x):
-        return self.features(x)
+        x = self.features(x)
+        if self.output_size is not None:
+            d_out, h_out, w_out = self.output_size
+            if x.shape[-3:] != (d_out, h_out, w_out):
+                x = nn.functional.interpolate(
+                    x, size=(d_out, h_out, w_out),
+                    mode='trilinear', align_corners=False
+                )
+        return x
 
     def forward_test(self, x):
         print('input: {}'.format(x.data.size()))
