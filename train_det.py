@@ -153,38 +153,13 @@ logger['r2_train'] = []
 logger['r2_test'] = []
 logger['time'] = []
 
-def _masked_mse_sum(output, target):
-    loss = F.mse_loss(
-        output[..., 0:136, 0:35],
-        target[..., 0:136, 0:35],
-        reduction='sum'
-    )
-    loss += F.mse_loss(
-        output[..., 51:87, 35:137],
-        target[..., 51:87, 35:137],
-        reduction='sum'
-    )
-    return loss
-
-def _masked_stats(y_tensor):
-    region1 = y_tensor[..., 0:136, 0:35]
-    region2 = y_tensor[..., 51:87, 35:137]
-    count = region1.numel() + region2.numel()
-    total_sum = region1.sum().item() + region2.sum().item()
-    total_sumsq = (region1 ** 2).sum().item() + (region2 ** 2).sum().item()
-    var = total_sumsq - (total_sum ** 2) / count
-    return count, var
-
-train_mask_count, train_y_var = _masked_stats(train_loader.dataset.tensors[1])
-test_mask_count, test_y_var = _masked_stats(test_loader.dataset.tensors[1])
-
 def test(epoch):#epoch is a number
     model.eval()
     mse = 0.
     for batch_idx, (input, target) in enumerate(test_loader):
         input, target = input.to(device), target.to(device)
         output = model(input)
-        mse += _masked_mse_sum(output, target).item()
+        mse += F.mse_loss(output, target, reduction='sum').item()
 
         # plot predictions
         if epoch % args.plot_freq == 0 and batch_idx == 0:
@@ -198,8 +173,8 @@ def test(epoch):#epoch is a number
                 plot_prediction_det(args.pred_dir, samples_target[i], 
                     samples_output[i], epoch, i, plot_fn=args.plot_fn)
 
-    rmse_test = np.sqrt(mse / test_mask_count)
-    r2_score = 1 - mse / test_y_var
+    rmse_test = np.sqrt(mse / n_out_pixels_test)
+    r2_score = 1 - mse / test_stats['y_var']
     print("epoch: {}, test r2-score:  {:.6f}".format(epoch, r2_score))
 
     if epoch % args.log_freq == 0:
@@ -213,14 +188,14 @@ def train(epoch):
         input, target = input.to(device), target.to(device)
         model.zero_grad()
         output = model(input)
-        loss = _masked_mse_sum(output, target)
+        loss = F.mse_loss(output, target, reduction='sum')
         loss.backward()
         optimizer.step()
         mse += loss.item()
 
-    rmse = np.sqrt(mse / train_mask_count)
+    rmse = np.sqrt(mse / n_out_pixels_train)
     scheduler.step(rmse)
-    r2_score = 1 - mse / train_y_var
+    r2_score = 1 - mse / train_stats['y_var']
     print("epoch: {}, training r2-score: {:.6f}".format(epoch, r2_score))
     if epoch % args.log_freq == 0:
         logger['r2_train'].append(r2_score)
