@@ -147,57 +147,72 @@ class DenseED3D(nn.Module):
         enc_block_layers = blocks[: len(blocks) // 2]
         dec_block_layers = blocks[len(blocks) // 2:]
 
-        self.features = nn.Sequential()
-
         # First conv: keep depth kernel 1 so depth dimension unchanged
-        self.features.add_module('In_conv', nn.Conv3d(in_channels, init_features,
-                      kernel_size=(1,7,7), stride=(1,2,2), padding=(0,2,2), bias=False))
+        self.in_conv = nn.Conv3d(in_channels, init_features,
+                      kernel_size=(1,7,7), stride=(1,2,2), padding=(0,2,2), bias=False)
+
+        self.enc_blocks = nn.ModuleList()
+        self.trans_downs = nn.ModuleList()
+        self.skip_channels = []
+
         num_features = init_features
-        for i, num_layers in enumerate(enc_block_layers):
+        for num_layers in enc_block_layers:
             block = _DenseBlock3D(num_layers=num_layers,
                                   in_features=num_features,
                                   bn_size=bn_size,
                                   growth_rate=growth_rate,
                                   drop_rate=drop_rate,
                                   bottleneck=bottleneck)
-            self.features.add_module('EncBlock%d' % (i + 1), block)
+            self.enc_blocks.append(block)
             num_features = num_features + num_layers * growth_rate
+            self.skip_channels.append(num_features)
 
             trans_down = _Transition3D(in_features=num_features,
                                      out_features=num_features // 2,
                                      down=True,
                                      drop_rate=drop_rate)
-            self.features.add_module('TransDown%d' % (i + 1), trans_down)
+            self.trans_downs.append(trans_down)
             num_features = num_features // 2
 
+        self.dec_blocks = nn.ModuleList()
+        self.trans_ups = nn.ModuleList()
+
         for i, num_layers in enumerate(dec_block_layers):
-            block = _DenseBlock3D(num_layers=num_layers,
-                                  in_features=num_features,
-                                  bn_size=bn_size,
-                                  growth_rate=growth_rate,
-                                  drop_rate=drop_rate,
-                                  bottleneck=bottleneck)
-            self.features.add_module('DecBlock%d' % (i + 1), block)
-            num_features += num_layers * growth_rate
-            if i < len(dec_block_layers) - 1:
+            if i == 0:
+                in_features = num_features
+            else:
                 trans_up = _Transition3D(in_features=num_features,
                                         out_features=num_features // 2,
                                         down=False,
                                         drop_rate=drop_rate)
-                self.features.add_module('TransUp%d' % (i + 1), trans_up)
+                self.trans_ups.append(trans_up)
                 num_features = num_features // 2
+                skip_features = self.skip_channels[-i]
+                in_features = num_features + skip_features
 
-        last_trans_up = last_decoding(num_features, out_channels,
+            block = _DenseBlock3D(num_layers=num_layers,
+                                  in_features=in_features,
+                                  bn_size=bn_size,
+                                  growth_rate=growth_rate,
+                                  drop_rate=drop_rate,
+                                  bottleneck=bottleneck)
+            self.dec_blocks.append(block)
+            num_features = in_features + num_layers * growth_rate
+
+        self.last_trans_up = last_decoding(num_features, out_channels,
                             kernel_size=(1,4,4), stride=(1,2,2), padding=(0,1,1),
                             output_padding=(0,1,1), bias=False, drop_rate=drop_rate)
-        self.features.add_module('LastTransUp', last_trans_up)
         if out_activation is not None:
             if out_activation in ['tanh', 'Tanh']:
-                self.features.add_module(out_activation, nn.Tanh())
+                self.out_activation = nn.Tanh()
             elif out_activation in ['relu', 'ReLU']:
-                self.features.add_module(out_activation, nn.ReLU(inplace=True))
+                self.out_activation = nn.ReLU(inplace=True)
             elif out_activation in ['sigmoid', 'Sigmoid']:
-                self.features.add_module(out_activation, nn.Sigmoid())
+                self.out_activation = nn.Sigmoid()
+            else:
+                self.out_activation = None
+        else:
+            self.out_activation = None
 
         # optionally align output size to target spatial size
         self.output_size = output_size
@@ -206,21 +221,71 @@ class DenseED3D(nn.Module):
             *self._num_parameters_convlayers()))
 
     def forward(self, x):
-        x = self.features(x)
-        if self.output_size is not None:
-            d_out, h_out, w_out = self.output_size
-            if x.shape[-3:] != (d_out, h_out, w_out):
-                x = nn.functional.interpolate(
-                    x, size=(d_out, h_out, w_out),
-                    mode='trilinear', align_corners=False
-                )
+        input_size = x.shape[-3:]
+        x = self.in_conv(x)
+
+        skip_features = []
+        for enc_block, trans_down in zip(self.enc_blocks, self.trans_downs):
+            x = enc_block(x)
+            skip_features.append(x)
+            x = trans_down(x)
+
+        for i, dec_block in enumerate(self.dec_blocks):
+            if i > 0:
+                x = self.trans_ups[i - 1](x)
+                skip = skip_features[-i]
+                if x.shape[-3:] != skip.shape[-3:]:
+                    x = nn.functional.interpolate(
+                        x, size=skip.shape[-3:],
+                        mode='trilinear', align_corners=False
+                    )
+                x = torch.cat([x, skip], dim=1)
+            x = dec_block(x)
+
+        x = self.last_trans_up(x)
+        if self.out_activation is not None:
+            x = self.out_activation(x)
+
+        target_size = self.output_size if self.output_size is not None else input_size
+        if x.shape[-3:] != target_size:
+            x = nn.functional.interpolate(
+                x, size=target_size,
+                mode='trilinear', align_corners=False
+            )
         return x
 
     def forward_test(self, x):
         print('input: {}'.format(x.data.size()))
-        for name, module in self.features._modules.items():
-            x = module(x)
-            print('{}: {}'.format(name, x.data.size()))
+        x = self.in_conv(x)
+        print('In_conv: {}'.format(x.data.size()))
+
+        skip_features = []
+        for i, (enc_block, trans_down) in enumerate(zip(self.enc_blocks, self.trans_downs)):
+            x = enc_block(x)
+            skip_features.append(x)
+            print('EncBlock{}: {}'.format(i + 1, x.data.size()))
+            x = trans_down(x)
+            print('TransDown{}: {}'.format(i + 1, x.data.size()))
+
+        for i, dec_block in enumerate(self.dec_blocks):
+            if i > 0:
+                x = self.trans_ups[i - 1](x)
+                skip = skip_features[-i]
+                if x.shape[-3:] != skip.shape[-3:]:
+                    x = nn.functional.interpolate(
+                        x, size=skip.shape[-3:],
+                        mode='trilinear', align_corners=False
+                    )
+                x = torch.cat([x, skip], dim=1)
+                print('TransUp{}+Skip: {}'.format(i, x.data.size()))
+            x = dec_block(x)
+            print('DecBlock{}: {}'.format(i + 1, x.data.size()))
+
+        x = self.last_trans_up(x)
+        print('LastTransUp: {}'.format(x.data.size()))
+        if self.out_activation is not None:
+            x = self.out_activation(x)
+            print('OutAct: {}'.format(x.data.size()))
         return x
 
     def _num_parameters_convlayers(self):

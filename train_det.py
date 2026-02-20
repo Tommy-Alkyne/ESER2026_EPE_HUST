@@ -47,13 +47,13 @@ args.pred_dir = args.train_dir + "/predictions"
 mkdirs([args.train_dir, args.pred_dir])
 
 # load checkpoint if in post mode
-if args.post:
-    if args.ckpt_epoch is not None:
-        checkpoint = args.ckpt_dir + '/model_epoch{}.pth'.format(args.ckpt_epoch)
-    else:
-        checkpoint = args.ckpt_dir + '/model_epoch{}.pth'.format(args.epochs)
-    model.load_state_dict(torch.load(checkpoint))
-    print('Loaded pre-trained model: {}'.format(checkpoint))
+# if args.post:
+#     if args.ckpt_epoch is not None:
+#         checkpoint = args.ckpt_dir + '/model_epoch{}.pth'.format(args.ckpt_epoch)
+#     else:
+#         checkpoint = args.ckpt_dir + '/model_epoch{}.pth'.format(args.epochs)
+#     model.load_state_dict(torch.load(checkpoint))
+#     print('Loaded pre-trained model: {}'.format(checkpoint))
 
 # load data
 # allow overriding train/test files via command-line --train-file / --test-file
