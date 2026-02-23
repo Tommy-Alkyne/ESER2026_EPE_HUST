@@ -116,11 +116,16 @@ def main():
 
 	# Load checkpoint state early to align channels
 	state = torch.load(args.ckpt_file, map_location=device)
-	if 'features.LastTransUp.conv2.weight' in state:
-		args.noc = state['features.LastTransUp.conv2.weight'].shape[0]
+	# 2D vs 3D checkpoints use different module names
+	if 'last_trans_up.conv2.weight' in state:
+		args.noc = state['last_trans_up.conv2.weight'].shape[0]
 	elif 'features.LastTransUp.convT2.weight' in state:
 		args.noc = state['features.LastTransUp.convT2.weight'].shape[1]
-	if 'features.In_conv.weight' in state:
+	elif 'features.LastTransUp.conv2.weight' in state:
+		args.noc = state['features.LastTransUp.conv2.weight'].shape[0]
+	if 'in_conv.weight' in state:
+		args.nic = state['in_conv.weight'].shape[1]
+	elif 'features.In_conv.weight' in state:
 		args.nic = state['features.In_conv.weight'].shape[1]
 
 	# Load data
