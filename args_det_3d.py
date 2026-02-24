@@ -31,7 +31,7 @@ class Parser(argparse.ArgumentParser):
         self.add_argument('--nic', type=int, default=1, help="number of input channels")
         self.add_argument('--noc', type=int, default=3, help="number of output channels")
         self.add_argument('--ndim', type=int, default=3, help='data dimensionality (fixed to 3 for this config)')
-        self.add_argument('--image-size', nargs='+', type=int, default=[1, 65, 65], help="image resolution, provide 3 ints for 3D (D H W)")
+        self.add_argument('--image-size', nargs='+', type=int, default=[1, 137, 137], help="image resolution, provide 3 ints for 3D (D H W)")
         # optional override files
         self.add_argument('--train-file', type=str, default=None, help='optional path to training hdf5 file')
         self.add_argument('--test-file', type=str, default=None, help='optional path to testing hdf5 file')

@@ -188,10 +188,10 @@ def train(epoch):
         input, target = input.to(device), target.to(device)
         model.zero_grad()
         output = model(input)
-        loss = F.mse_loss(output, target, reduction='sum')
+        loss = F.l1_loss(output, target, reduction='sum')
         loss.backward()
         optimizer.step()
-        mse += loss.item()
+        mse += F.mse_loss(output, target, reduction='sum').item()
 
     rmse = np.sqrt(mse / n_out_pixels_train)
     scheduler.step(rmse)
