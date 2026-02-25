@@ -94,8 +94,14 @@ def _load_data(args):
 		from utils.load_data_3d import load_data
 	else:
 		from utils.load_data import load_data
-	loader, stats = load_data(args.data_file, args.batch_size,input_key=None, prefer_sensor_input=True,
-              align_input_to_output=True,shuff=False)
+	loader, stats = load_data(
+		args.data_file,
+		args.batch_size,
+		input_key=None,
+		prefer_sensor_input=False,
+		align_input_to_output=True,
+		shuff=False
+	)
 	return loader, stats
 
 

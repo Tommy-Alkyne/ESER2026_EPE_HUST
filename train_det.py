@@ -110,12 +110,19 @@ if getattr(args, 'ndim', 2) == 3:
                 args.noc = y_shape[1]
                 args.image_size = [1] + list(y_shape[-2:])
 
-            if 'sensor_input' in f:
-                x_shape = f['sensor_input'].shape
-            else:
+            if 'spatial_input' in f:
+                spatial_shape = f['spatial_input'].shape
+                args.nic = spatial_shape[1]
+                if 'input' in f:
+                    args.nic += f['input'].shape[1]
+                if 'sensor_input' in f:
+                    args.nic += f['sensor_input'].shape[1]
+            elif 'input' in f:
                 x_shape = f['input'].shape
-            if len(x_shape) in [4, 5]:
-                args.nic = x_shape[1]
+                args.nic = x_shape[1] if len(x_shape) in [4, 5] else 1
+            elif 'sensor_input' in f:
+                x_shape = f['sensor_input'].shape
+                args.nic = x_shape[1] if len(x_shape) in [4, 5] else 1
             else:
                 args.nic = 1
     except Exception as e:

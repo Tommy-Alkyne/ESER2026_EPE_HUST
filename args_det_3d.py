@@ -28,7 +28,7 @@ class Parser(argparse.ArgumentParser):
         self.add_argument('--ntrain', type=int, default=512, help="number of training data")
         self.add_argument('--ntest', type=int, default=500, help="number of test data") 
         # channels and dims for 3D
-        self.add_argument('--nic', type=int, default=1, help="number of input channels")
+        self.add_argument('--nic', type=int, default=3, help="number of input channels")
         self.add_argument('--noc', type=int, default=3, help="number of output channels")
         self.add_argument('--ndim', type=int, default=3, help='data dimensionality (fixed to 3 for this config)')
         self.add_argument('--image-size', nargs='+', type=int, default=[1, 137, 137], help="image resolution, provide 3 ints for 3D (D H W)")

@@ -5,8 +5,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 
-def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=True,
-              align_input_to_output=True,shuff=True):
+def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
+              align_input_to_output=True, shuff=True, combine_inputs=True):
     """Return data loader (3D).
 
     Args:
@@ -20,14 +20,42 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=True,
         (data_loader (torch.utils.data.DataLoader), stats)
     """
 
+    def _reshape_to_5d(arr):
+        if arr.ndim == 3:
+            return arr[:, None, None, :, :]
+        if arr.ndim == 4:
+            return arr[:, :, None, :, :]
+        if arr.ndim == 5:
+            return arr
+        raise ValueError("Unsupported input ndim {}".format(arr.ndim))
+
+    def _vector_to_5d(arr, target_shape):
+        n_samples = arr.shape[0]
+        vec = arr.reshape(n_samples, -1)
+        vec = vec[:, :, None, None, None]
+        d, h, w = target_shape
+        return np.tile(vec, (1, 1, d, h, w))
+
     with h5py.File(data_dir, 'r') as f:
+        y_data = f['output'][()]
+
         if input_key is not None and input_key in f:
             x_data = f[input_key][()]
-        elif prefer_sensor_input and 'sensor_input' in f:
+        elif combine_inputs and 'spatial_input' in f:
+            spatial_data = _reshape_to_5d(f['spatial_input'][()])
+            _, _, d_s, h_s, w_s = spatial_data.shape
+            parts = [spatial_data]
+            if 'input' in f:
+                parts.append(_vector_to_5d(f['input'][()], (d_s, h_s, w_s)))
+            if 'sensor_input' in f:
+                parts.append(_vector_to_5d(f['sensor_input'][()], (d_s, h_s, w_s)))
+            x_data = np.concatenate(parts, axis=1)
+        elif 'input' in f and (not prefer_sensor_input or 'sensor_input' not in f):
+            x_data = f['input'][()]
+        elif 'sensor_input' in f:
             x_data = f['sensor_input'][()]
         else:
-            x_data = f['input'][()]
-        y_data = f['output'][()]
+            raise KeyError('No valid input dataset found in HDF5 file')
 
     print("input data shape: {}".format(x_data.shape))
     print("output data shape: {}".format(y_data.shape))
@@ -39,14 +67,12 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=True,
         if side * side != n_feats:
             raise ValueError(
                 "2D input cannot be reshaped into a square map. "
-                "Provide `sensor_input` or `input_key` with spatial data."
+                "Provide `spatial_input` or `input_key` with spatial data."
             )
         x_data = x_data.reshape(n_samples, 1, 1, side, side)
-    elif x_data.ndim == 3:
-        x_data = x_data[:, None, None, :, :]
-    elif x_data.ndim == 4:
-        x_data = x_data[:, :, None, :, :]
-    elif x_data.ndim != 5:
+    elif x_data.ndim in (3, 4, 5):
+        x_data = _reshape_to_5d(x_data)
+    else:
         raise ValueError("Unsupported input ndim {}".format(x_data.ndim))
 
     # reshape output to 5D (N, C, D, H, W)
