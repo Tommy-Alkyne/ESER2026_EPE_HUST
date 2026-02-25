@@ -39,6 +39,8 @@ class Parser(argparse.ArgumentParser):
         self.add_argument('--batch-size', type=int, default=16, help='input batch size for training (default: 16)')
         self.add_argument('--test-batch-size', type=int, default=100, help='input batch size for testing (default: 100)')
         self.add_argument('--seed', type=int, default=1, help='manual seed used in Tensor')
+        self.add_argument('--lambda-l1', type=float, default=1.0, help='weight for base L1 loss')
+        self.add_argument('--lambda-grad', type=float, default=2.0, help='weight for gradient loss')
         
         # logging
         self.add_argument('--ckpt-epoch', type=int, default=None, help='which epoch of checkpoints to be loaded in post mode')

@@ -153,6 +153,64 @@ logger['r2_train'] = []
 logger['r2_test'] = []
 logger['time'] = []
 
+def build_t_mask(output):
+    h, w = output.shape[-2:]
+    mask_2d = torch.zeros((h, w), device=output.device, dtype=output.dtype)
+    y1 = min(136, h)
+    x1 = min(35, w)
+    if y1 > 0 and x1 > 0:
+        mask_2d[0:y1, 0:x1] = 1.0
+    y0, y1b = min(51, h), min(87, h)
+    x0, x1b = min(35, w), min(137, w)
+    if y1b > y0 and x1b > x0:
+        mask_2d[y0:y1b, x0:x1b] = 1.0
+    if output.dim() == 4:
+        return mask_2d.unsqueeze(0).unsqueeze(0)
+    if output.dim() == 5:
+        d = output.shape[-3]
+        return mask_2d.unsqueeze(0).unsqueeze(0).unsqueeze(2).repeat(1, 1, d, 1, 1)
+    raise ValueError('Unsupported output dim {}'.format(output.dim()))
+
+
+def compute_gradient_loss(output, target, mask=None):
+    if output.dim() == 4:
+        grad_output_y = output[:, :, :, 1:] - output[:, :, :, :-1]
+        grad_output_x = output[:, :, 1:, :] - output[:, :, :-1, :]
+        grad_target_y = target[:, :, :, 1:] - target[:, :, :, :-1]
+        grad_target_x = target[:, :, 1:, :] - target[:, :, :-1, :]
+        if mask is not None:
+            mask_y = mask[:, :, :, 1:] * mask[:, :, :, :-1]
+            mask_x = mask[:, :, 1:, :] * mask[:, :, :-1, :]
+            grad_output_y = grad_output_y * mask_y
+            grad_output_x = grad_output_x * mask_x
+            grad_target_y = grad_target_y * mask_y
+            grad_target_x = grad_target_x * mask_x
+        loss_y = F.l1_loss(grad_output_y, grad_target_y, reduction='sum')
+        loss_x = F.l1_loss(grad_output_x, grad_target_x, reduction='sum')
+        return loss_y + loss_x
+    if output.dim() == 5:
+        grad_output_z = output[:, :, 1:, :, :] - output[:, :, :-1, :, :]
+        grad_output_y = output[:, :, :, 1:, :] - output[:, :, :, :-1, :]
+        grad_output_x = output[:, :, :, :, 1:] - output[:, :, :, :, :-1]
+        grad_target_z = target[:, :, 1:, :, :] - target[:, :, :-1, :, :]
+        grad_target_y = target[:, :, :, 1:, :] - target[:, :, :, :-1, :]
+        grad_target_x = target[:, :, :, :, 1:] - target[:, :, :, :, :-1]
+        if mask is not None:
+            mask_z = mask[:, :, 1:, :, :] * mask[:, :, :-1, :, :]
+            mask_y = mask[:, :, :, 1:, :] * mask[:, :, :, :-1, :]
+            mask_x = mask[:, :, :, :, 1:] * mask[:, :, :, :, :-1]
+            grad_output_z = grad_output_z * mask_z
+            grad_output_y = grad_output_y * mask_y
+            grad_output_x = grad_output_x * mask_x
+            grad_target_z = grad_target_z * mask_z
+            grad_target_y = grad_target_y * mask_y
+            grad_target_x = grad_target_x * mask_x
+        loss_z = F.l1_loss(grad_output_z, grad_target_z, reduction='sum')
+        loss_y = F.l1_loss(grad_output_y, grad_target_y, reduction='sum')
+        loss_x = F.l1_loss(grad_output_x, grad_target_x, reduction='sum')
+        return loss_z + loss_y + loss_x
+    raise ValueError('Unsupported output dim {}'.format(output.dim()))
+
 def test(epoch):#epoch is a number
     model.eval()
     mse = 0.
@@ -188,7 +246,12 @@ def train(epoch):
         input, target = input.to(device), target.to(device)
         model.zero_grad()
         output = model(input)
-        loss = F.l1_loss(output, target, reduction='sum')
+        t_mask = build_t_mask(output)
+        loss_grad = compute_gradient_loss(output, target, mask=t_mask)
+        output_masked = output * t_mask
+        target_masked = target * t_mask
+        loss_l1 = F.l1_loss(output_masked, target_masked, reduction='sum')
+        loss = (args.lambda_l1 * loss_l1) + (args.lambda_grad * loss_grad)
         loss.backward()
         optimizer.step()
         mse += F.mse_loss(output, target, reduction='sum').item()
