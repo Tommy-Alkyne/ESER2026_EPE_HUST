@@ -224,7 +224,10 @@ def test(epoch):#epoch is a number
     for batch_idx, (input, target) in enumerate(test_loader):
         input, target = input.to(device), target.to(device)
         output = model(input)
-        mse += F.mse_loss(output, target, reduction='sum').item()
+        t_mask = build_t_mask(output)
+        output_masked = output * t_mask
+        target_masked = target * t_mask
+        mse += F.mse_loss(output_masked, target_masked, reduction='sum').item()
 
         # plot predictions
         if epoch % args.plot_freq == 0 and batch_idx == 0:
@@ -261,7 +264,7 @@ def train(epoch):
         loss = (args.lambda_l1 * loss_l1) + (args.lambda_grad * loss_grad)
         loss.backward()
         optimizer.step()
-        mse += F.mse_loss(output, target, reduction='sum').item()
+        mse += F.mse_loss(output_masked, target_masked, reduction='sum').item()
 
     rmse = np.sqrt(mse / n_out_pixels_train)
     scheduler.step(rmse)
