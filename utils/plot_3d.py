@@ -91,10 +91,14 @@ def plot_prediction_det(save_dir, target, prediction, epoch, index,
 
 def save_stats(save_dir, logger, x_axis):
 
-    rmse_train = logger['rmse_train']
-    rmse_test = logger['rmse_test']
-    r2_train = logger['r2_train']
-    r2_test = logger['r2_test']
+    rmse_train = logger.get('rmse_train', [])
+    rmse_test = logger.get('rmse_test', [])
+    r2_train = logger.get('r2_train', [])
+    r2_test = logger.get('r2_test', [])
+    loss_train = logger.get('loss_train', [])
+    loss_test = logger.get('loss_test', [])
+    acc_train = logger.get('acc_train', [])
+    acc_test = logger.get('acc_test', [])
 
     if 'mnlp_test' in logger.keys():
         mnlp_test = logger['mnlp_test']
@@ -120,27 +124,53 @@ def save_stats(save_dir, logger, x_axis):
             plt.close()
             np.savetxt(save_dir + "/log_beta.txt", log_beta)
 
-    plt.figure()
-    plt.plot(x_axis, r2_train, label="Train: {:.3f}".format(np.mean(r2_train[-5:])))
-    plt.plot(x_axis, r2_test, label="Test: {:.3f}".format(np.mean(r2_test[-5:])))
-    plt.xlabel('Epoch')
-    plt.ylabel(r'$R^2$-score')
-    plt.legend(loc='lower right')
-    plt.savefig(save_dir + "/r2.pdf", dpi=600)
-    plt.close()
-    np.savetxt(save_dir + "/r2_train.txt", r2_train)
-    np.savetxt(save_dir + "/r2_test.txt", r2_test)
+    if len(r2_train) > 0 and len(r2_test) > 0:
+        plt.figure()
+        plt.plot(x_axis, r2_train, label="Train: {:.3f}".format(np.mean(r2_train[-5:])))
+        plt.plot(x_axis, r2_test, label="Test: {:.3f}".format(np.mean(r2_test[-5:])))
+        plt.xlabel('Epoch')
+        plt.ylabel(r'$R^2$-score')
+        plt.legend(loc='lower right')
+        plt.savefig(save_dir + "/r2.pdf", dpi=600)
+        plt.close()
+        np.savetxt(save_dir + "/r2_train.txt", r2_train)
+        np.savetxt(save_dir + "/r2_test.txt", r2_test)
 
-    plt.figure()
-    plt.plot(x_axis, rmse_train, label="train: {:.3f}".format(np.mean(rmse_train[-5:])))
-    plt.plot(x_axis, rmse_test, label="test: {:.3f}".format(np.mean(rmse_test[-5:])))
-    plt.xlabel('Epoch')
-    plt.ylabel('RMSE')
-    plt.legend(loc='upper right')
-    plt.savefig(save_dir + "/rmse.pdf", dpi=600)
-    plt.close()
-    np.savetxt(save_dir + "/rmse_train.txt", rmse_train)
-    np.savetxt(save_dir + "/rmse_test.txt", rmse_test)
+    if len(rmse_train) > 0 and len(rmse_test) > 0:
+        plt.figure()
+        plt.plot(x_axis, rmse_train, label="train: {:.3f}".format(np.mean(rmse_train[-5:])))
+        plt.plot(x_axis, rmse_test, label="test: {:.3f}".format(np.mean(rmse_test[-5:])))
+        plt.xlabel('Epoch')
+        plt.ylabel('RMSE')
+        plt.legend(loc='upper right')
+        plt.savefig(save_dir + "/rmse.pdf", dpi=600)
+        plt.close()
+        np.savetxt(save_dir + "/rmse_train.txt", rmse_train)
+        np.savetxt(save_dir + "/rmse_test.txt", rmse_test)
+
+    if len(acc_train) > 0 and len(acc_test) > 0:
+        plt.figure()
+        plt.plot(x_axis, np.array(acc_train) * 100, label="Train: {:.2f}%".format(np.mean(acc_train[-5:]) * 100))
+        plt.plot(x_axis, np.array(acc_test) * 100, label="Test: {:.2f}%".format(np.mean(acc_test[-5:]) * 100))
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy (%)')
+        plt.legend(loc='lower right')
+        plt.savefig(save_dir + "/accuracy.pdf", dpi=600)
+        plt.close()
+        np.savetxt(save_dir + "/acc_train.txt", acc_train)
+        np.savetxt(save_dir + "/acc_test.txt", acc_test)
+
+    if len(loss_train) > 0 and len(loss_test) > 0:
+        plt.figure()
+        plt.plot(x_axis, loss_train, label="Train: {:.4f}".format(np.mean(loss_train[-5:])))
+        plt.plot(x_axis, loss_test, label="Test: {:.4f}".format(np.mean(loss_test[-5:])))
+        plt.xlabel('Epoch')
+        plt.ylabel('Cross-Entropy Loss')
+        plt.legend(loc='upper right')
+        plt.savefig(save_dir + "/loss.pdf", dpi=600)
+        plt.close()
+        np.savetxt(save_dir + "/loss_train.txt", loss_train)
+        np.savetxt(save_dir + "/loss_test.txt", loss_test)
 
 
 

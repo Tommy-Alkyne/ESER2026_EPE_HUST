@@ -3,6 +3,7 @@ Train deterministic convolutional encoder-decoder networks
 """
 
 import torch
+import torch.nn as nn
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
@@ -129,7 +130,8 @@ if getattr(args, 'ndim', 2) == 3:
         print('Warning: failed to infer 3D data shapes from {}: {}'.format(train_data_dir, e))
 
 # initialize model
-model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=getattr(args, 'noc', 3), 
+num_classes = 4
+model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=num_classes,
                 blocks=args.blocks,
                 growth_rate=args.growth_rate, 
                 init_features=args.init_features,
@@ -150,14 +152,14 @@ scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
                     verbose=True, threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
-n_out_pixels_train = len(train_loader.dataset) * train_loader.dataset[0][1].numel()
-n_out_pixels_test = len(test_loader.dataset) * test_loader.dataset[0][1].numel()
+class_weights = torch.tensor([0.1, 1.0, 5.0, 10.0], dtype=torch.float).to(device)
+criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
 
 logger = {}
-logger['rmse_train'] = []
-logger['rmse_test'] = []
-logger['r2_train'] = []
-logger['r2_test'] = []
+logger['loss_train'] = []
+logger['loss_test'] = []
+logger['acc_train'] = []
+logger['acc_test'] = []
 logger['time'] = []
 
 def build_t_mask(output):
@@ -177,6 +179,25 @@ def build_t_mask(output):
         d = output.shape[-3]
         return mask_2d.unsqueeze(0).unsqueeze(0).unsqueeze(2).repeat(1, 1, d, 1, 1)
     raise ValueError('Unsupported output dim {}'.format(output.dim()))
+
+
+def continuous_to_discrete(target_continuous, thresholds=[0.02, 0.08, 0.15]):
+    target_discrete = torch.zeros_like(target_continuous, dtype=torch.long)
+    target_discrete[target_continuous >= thresholds[0]] = 1
+    target_discrete[target_continuous >= thresholds[1]] = 2
+    target_discrete[target_continuous >= thresholds[2]] = 3
+    if target_discrete.dim() >= 2 and target_discrete.shape[1] == 1:
+        target_discrete = target_discrete.squeeze(1)
+    return target_discrete
+
+
+def apply_ignore_index_with_t_mask(target_discrete, output):
+    t_mask = build_t_mask(output)
+    t_mask_bool = t_mask.squeeze(1).bool()
+    if t_mask_bool.shape[0] == 1 and target_discrete.shape[0] > 1:
+        t_mask_bool = t_mask_bool.expand(target_discrete.shape[0], *t_mask_bool.shape[1:])
+    target_discrete[~t_mask_bool] = -100
+    return target_discrete
 
 
 def compute_gradient_loss(output, target, mask=None):
@@ -220,59 +241,78 @@ def compute_gradient_loss(output, target, mask=None):
 
 def test(epoch):#epoch is a number
     model.eval()
-    mse = 0.
+    total_loss = 0.
+    correct_pixels = 0
+    total_valid_pixels = 0
     for batch_idx, (input, target) in enumerate(test_loader):
         input, target = input.to(device), target.to(device)
         output = model(input)
-        t_mask = build_t_mask(output)
-        output_masked = output * t_mask
-        target_masked = target * t_mask
-        mse += F.mse_loss(output_masked, target_masked, reduction='sum').item()
+
+        target_discrete = continuous_to_discrete(target)
+        target_discrete = apply_ignore_index_with_t_mask(target_discrete, output)
+        loss = criterion(output, target_discrete)
+        total_loss += loss.item()
+
+        preds = torch.argmax(output, dim=1)
+        valid_mask = (target_discrete != -100)
+        correct_pixels += (preds[valid_mask] == target_discrete[valid_mask]).sum().item()
+        total_valid_pixels += valid_mask.sum().item()
 
         # plot predictions
         if epoch % args.plot_freq == 0 and batch_idx == 0:
             n_samples = 6 if epoch == args.epochs else 2
             idx = torch.randperm(input.size(0))[:n_samples]
-            samples_output = output.data.cpu()[idx].numpy()
-            samples_target = target.data.cpu()[idx].numpy()
+
+            samples_output = preds.unsqueeze(1).data.cpu()[idx].numpy()
+            vis_target = target_discrete.clone()
+            vis_target[vis_target == -100] = 0
+            samples_target = vis_target.unsqueeze(1).data.cpu()[idx].numpy()
 
             for i in range(n_samples):
                 print('epoch {}: plotting prediction {}'.format(epoch, i))
                 plot_prediction_det(args.pred_dir, samples_target[i], 
                     samples_output[i], epoch, i, plot_fn=args.plot_fn)
 
-    rmse_test = np.sqrt(mse / n_out_pixels_test)
-    r2_score = 1 - mse / test_stats['y_var']
-    print("epoch: {}, test r2-score:  {:.6f}".format(epoch, r2_score))
+    acc = correct_pixels / total_valid_pixels if total_valid_pixels > 0 else 0.0
+    avg_loss = total_loss / len(test_loader)
+    print("epoch: {}, test loss: {:.4f}, test accuracy: {:.2f}%".format(epoch, avg_loss, acc * 100))
 
     if epoch % args.log_freq == 0:
-        logger['r2_test'].append(r2_score)
-        logger['rmse_test'].append(rmse_test)
+        logger['loss_test'].append(avg_loss)
+        logger['acc_test'].append(acc)
 
 def train(epoch):
     model.train()
-    mse = 0.
+    total_loss = 0.
+    correct_pixels = 0
+    total_valid_pixels = 0
     for _, (input, target) in enumerate(train_loader):
         input, target = input.to(device), target.to(device)
         model.zero_grad()
         output = model(input)
-        t_mask = build_t_mask(output)
-        loss_grad = compute_gradient_loss(output, target, mask=t_mask)
-        output_masked = output * t_mask
-        target_masked = target * t_mask
-        loss_l1 = F.l1_loss(output_masked, target_masked, reduction='sum')
-        loss = (args.lambda_l1 * loss_l1) + (args.lambda_grad * loss_grad)
+
+        target_discrete = continuous_to_discrete(target)
+        target_discrete = apply_ignore_index_with_t_mask(target_discrete, output)
+
+        loss = criterion(output, target_discrete)
         loss.backward()
         optimizer.step()
-        mse += F.mse_loss(output_masked, target_masked, reduction='sum').item()
 
-    rmse = np.sqrt(mse / n_out_pixels_train)
-    scheduler.step(rmse)
-    r2_score = 1 - mse / train_stats['y_var']
-    print("epoch: {}, training r2-score: {:.6f}".format(epoch, r2_score))
+        total_loss += loss.item()
+        with torch.no_grad():
+            preds = torch.argmax(output, dim=1)
+            valid_mask = (target_discrete != -100)
+            correct_pixels += (preds[valid_mask] == target_discrete[valid_mask]).sum().item()
+            total_valid_pixels += valid_mask.sum().item()
+
+    avg_loss = total_loss / len(train_loader)
+    scheduler.step(avg_loss)
+    acc = correct_pixels / total_valid_pixels if total_valid_pixels > 0 else 0.0
+    print("epoch: {}, training loss: {:.4f}, accuracy: {:.2f}%".format(epoch, avg_loss, acc * 100))
+
     if epoch % args.log_freq == 0:
-        logger['r2_train'].append(r2_score)
-        logger['rmse_train'].append(rmse)
+        logger['loss_train'].append(avg_loss)
+        logger['acc_train'].append(acc)
     # save model
     if epoch % args.ckpt_freq == 0:
         torch.save(model.state_dict(), args.ckpt_dir + "/model_epoch{}.pth".format(epoch))
