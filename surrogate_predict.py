@@ -46,6 +46,8 @@ def parse_args():
 	p.add_argument('--limit', type=int, default=None, help='Limit number of samples to predict (debug)')
 	p.add_argument('--out-file', type=str, default=None, help='Output file (.hdf5 or .npz) to save predictions')
 	p.add_argument('--device', type=str, default=None, help='Device override, e.g. cuda:0 or cpu')
+	p.add_argument('--save-mode', type=str, default='auto', choices=['auto', 'logits', 'class'],
+			   help='How to save predictions: logits (raw model output), class (argmax labels), or auto')
 
 	args = p.parse_args()
 
@@ -150,12 +152,27 @@ def main():
 	model.load_state_dict(state)
 	model.eval()
 
-	# Prepare output array preallocation
-	# Inspect one target to infer spatial dims
+	# Prepare output array preallocation using model output shape
+	# (robust to discrete models where out_channels may differ from dataset output channels)
 	sample_x, sample_y = loader.dataset[0]
-	y_shape = tuple(sample_y.shape)  # (C, [D], H, W)
-	pred_shape = (n_total,) + y_shape
-	preds = np.zeros(pred_shape, dtype=np.float32)
+	with torch.no_grad():
+		sample_pred = model(sample_x.unsqueeze(0).to(device)).detach().cpu().numpy()
+	model_c = sample_pred.shape[1]
+	target_c = sample_y.shape[0] if sample_y.ndim >= 1 else 1
+	if args.save_mode == 'auto':
+		if target_c == 1 and model_c > 1:
+			save_mode = 'class'
+		else:
+			save_mode = 'logits'
+	else:
+		save_mode = args.save_mode
+
+	if save_mode == 'class':
+		pred_shape = (n_total, 1) + tuple(sample_pred.shape[2:])
+		preds = np.zeros(pred_shape, dtype=np.int64)
+	else:
+		pred_shape = (n_total,) + tuple(sample_pred.shape[1:])
+		preds = np.zeros(pred_shape, dtype=np.float32)
 
 	# Iterate and predict
 	idx_write = 0
@@ -165,6 +182,8 @@ def main():
 				break
 			x = x.to(device)
 			y_pred = model(x).detach().cpu().numpy()
+			if save_mode == 'class':
+				y_pred = np.argmax(y_pred, axis=1, keepdims=True)
 			bs = y_pred.shape[0]
 			end = min(idx_write + bs, n_total)
 			preds[idx_write:end] = y_pred[:(end - idx_write)]
@@ -193,6 +212,7 @@ def main():
 			f.create_dataset('predictions', data=preds, compression='gzip')
 			f.attrs['source_data'] = args.data_file
 			f.attrs['ckpt_file'] = args.ckpt_file
+			f.attrs['save_mode'] = save_mode
 			f.attrs['ndim'] = args.ndim
 			f.attrs['nic'] = args.nic
 			f.attrs['noc'] = args.noc
@@ -207,6 +227,7 @@ def main():
 		np.savez_compressed(args.out_file, predictions=preds, meta={
 			'source_data': args.data_file,
 			'ckpt_file': args.ckpt_file,
+			'save_mode': save_mode,
 			'ndim': args.ndim,
 			'nic': args.nic,
 			'noc': args.noc,

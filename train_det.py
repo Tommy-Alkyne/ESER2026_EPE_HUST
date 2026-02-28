@@ -152,8 +152,10 @@ scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
                     verbose=True, threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
-class_weights = torch.tensor([0.1, 1.0, 5.0, 10.0], dtype=torch.float).to(device)
-criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
+class_weights = torch.tensor([1.0, 2.0, 4.0, 8.0], dtype=torch.float).to(device)
+criterion = nn.CrossEntropyLoss(
+    weight=class_weights, 
+    ignore_index=-100)
 
 logger = {}
 logger['loss_train'] = []
@@ -181,13 +183,39 @@ def build_t_mask(output):
     raise ValueError('Unsupported output dim {}'.format(output.dim()))
 
 
-def continuous_to_discrete(target_continuous, thresholds=[0.02, 0.08, 0.15]):
+# def continuous_to_discrete(target_continuous, thresholds=[0.02, 0.08, 0.15]):
+#     target_discrete = torch.zeros_like(target_continuous, dtype=torch.long)
+#     target_discrete[target_continuous >= thresholds[0]] = 1
+#     target_discrete[target_continuous >= thresholds[1]] = 2
+#     target_discrete[target_continuous >= thresholds[2]] = 3
+#     if target_discrete.dim() >= 2 and target_discrete.shape[1] == 1:
+#         target_discrete = target_discrete.squeeze(1)
+#     return target_discrete
+
+def continuous_to_discrete(target_continuous, thresholds=[0.1, 0.4, 0.7]):
+    """
+    按当前样本最大值的比例（10%, 40%, 70%）进行离散化
+    """
     target_discrete = torch.zeros_like(target_continuous, dtype=torch.long)
-    target_discrete[target_continuous >= thresholds[0]] = 1
-    target_discrete[target_continuous >= thresholds[1]] = 2
-    target_discrete[target_continuous >= thresholds[2]] = 3
+    B = target_continuous.shape[0]
+    
+    for i in range(B):
+        # 找到这单张图里的最大浓度值（clamp防止除以0）
+        max_val = target_continuous[i].max().clamp(min=1e-8) 
+        
+        # 按照这张图最大值的比例来切分
+        t0 = thresholds[0] * max_val
+        t1 = thresholds[1] * max_val
+        t2 = thresholds[2] * max_val
+        
+        # 阶梯状赋值
+        target_discrete[i, target_continuous[i] >= t0] = 1
+        target_discrete[i, target_continuous[i] >= t1] = 2
+        target_discrete[i, target_continuous[i] >= t2] = 3
+        
     if target_discrete.dim() >= 2 and target_discrete.shape[1] == 1:
         target_discrete = target_discrete.squeeze(1)
+        
     return target_discrete
 
 
