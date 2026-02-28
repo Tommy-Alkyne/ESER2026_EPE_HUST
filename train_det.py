@@ -153,7 +153,7 @@ scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
                     verbose=True, threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
-class_weights = torch.tensor(getattr(args, 'class_weights', [0.1, 1.0, 5.0, 10.0]), dtype=torch.float).to(device)
+class_weights = torch.tensor(getattr(args, 'class_weights', [1.0, 2.0, 4.0, 8.0]), dtype=torch.float).to(device)
 criterion_ce = nn.CrossEntropyLoss(
     weight=class_weights, 
     ignore_index=-100)
@@ -198,15 +198,18 @@ def build_t_mask(output):
 #         target_discrete = target_discrete.squeeze(1)
 #     return target_discrete
 
-def continuous_to_discrete(target_continuous, thresholds=None):
-    if thresholds is None:
-        thresholds = getattr(args, 'cls_thresholds', [0.02, 0.08, 0.15])
+def continuous_to_discrete(target_continuous, thresholds=[0.1, 0.4, 0.7]):
     target_discrete = torch.zeros_like(target_continuous, dtype=torch.long)
     B = target_continuous.shape[0]
     
     for i in range(B):
-        for cls_idx, th in enumerate(thresholds, start=1):
-            target_discrete[i, target_continuous[i] >= th] = cls_idx
+        max_val = target_continuous[i].max().clamp(min=1e-8)
+        t0 = thresholds[0] * max_val
+        t1 = thresholds[1] * max_val
+        t2 = thresholds[2] * max_val
+        target_discrete[i, target_continuous[i] >= t0] = 1
+        target_discrete[i, target_continuous[i] >= t1] = 2
+        target_discrete[i, target_continuous[i] >= t2] = 3
         
     if target_discrete.dim() >= 2 and target_discrete.shape[1] == 1:
         target_discrete = target_discrete.squeeze(1)
@@ -283,6 +286,7 @@ def test(epoch):#epoch is a number
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]
+        out_reg = torch.relu(out_reg)
         target_continuous = select_target_channel(target)
 
         target_discrete = continuous_to_discrete(target_continuous)
@@ -310,10 +314,10 @@ def test(epoch):#epoch is a number
             n_samples = 6 if epoch == args.epochs else 2
             idx = torch.randperm(input.size(0))[:n_samples]
 
-            samples_output = preds.unsqueeze(1).data.cpu()[idx].numpy()
-            vis_target = target_discrete.clone()
-            vis_target[vis_target == -100] = 0
-            samples_target = vis_target.unsqueeze(1).data.cpu()[idx].numpy()
+            out_reg_plot = out_reg.clone()
+            out_reg_plot[~t_mask_reg_bool] = 0.0
+            samples_output = out_reg_plot.data.cpu()[idx].numpy()
+            samples_target = target_continuous.data.cpu()[idx].numpy()
 
             for i in range(n_samples):
                 print('epoch {}: plotting prediction {}'.format(epoch, i))
@@ -347,6 +351,7 @@ def train(epoch):
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]
+        out_reg = torch.relu(out_reg)
         target_continuous = select_target_channel(target)
 
         target_discrete = continuous_to_discrete(target_continuous)
