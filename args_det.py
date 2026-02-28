@@ -41,6 +41,11 @@ class Parser(argparse.ArgumentParser):
         self.add_argument('--seed', type=int, default=1, help='manual seed used in Tensor')
         self.add_argument('--lambda-l1', type=float, default=1.0, help='weight for base L1 loss')
         self.add_argument('--lambda-grad', type=float, default=2.0, help='weight for gradient loss')
+        self.add_argument('--num-classes', type=int, default=4, help='number of classes for classification head')
+        self.add_argument('--class-weights', nargs='+', type=float, default=[0.1, 1.0, 5.0, 10.0], help='class weights for CE loss')
+        self.add_argument('--cls-thresholds', nargs='+', type=float, default=[0.02, 0.08, 0.15], help='thresholds to convert continuous target into discrete labels')
+        self.add_argument('--lambda-reg', type=float, default=0.1, help='weight for regression L1 branch in hybrid loss')
+        self.add_argument('--target-channel', type=int, default=0, help='which target channel to use for hybrid target when target has multiple channels')
         
         # logging
         self.add_argument('--ckpt-epoch', type=int, default=None, help='which epoch of checkpoints to be loaded in post mode')
@@ -64,6 +69,13 @@ class Parser(argparse.ArgumentParser):
 
         assert args.epochs % args.ckpt_freq == 0, 'epochs must'\
             'be dividable by ckpt_freq'
+
+        if args.num_classes < 2:
+            raise ValueError('`--num-classes` must be >= 2')
+        if len(args.class_weights) != args.num_classes:
+            raise ValueError('`--class-weights` length must equal `--num-classes`')
+        if len(args.cls_thresholds) != args.num_classes - 1:
+            raise ValueError('`--cls-thresholds` length must equal `--num-classes - 1`')
 
         # seed
         if args.seed is None:

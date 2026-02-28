@@ -130,8 +130,9 @@ if getattr(args, 'ndim', 2) == 3:
         print('Warning: failed to infer 3D data shapes from {}: {}'.format(train_data_dir, e))
 
 # initialize model
-num_classes = 4
-model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=num_classes,
+num_classes = getattr(args, 'num_classes', 4)
+regression_channels = 1
+model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=num_classes + regression_channels,
                 blocks=args.blocks,
                 growth_rate=args.growth_rate, 
                 init_features=args.init_features,
@@ -152,16 +153,21 @@ scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
                     verbose=True, threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
-class_weights = torch.tensor([1.0, 2.0, 4.0, 8.0], dtype=torch.float).to(device)
-criterion = nn.CrossEntropyLoss(
+class_weights = torch.tensor(getattr(args, 'class_weights', [0.1, 1.0, 5.0, 10.0]), dtype=torch.float).to(device)
+criterion_ce = nn.CrossEntropyLoss(
     weight=class_weights, 
     ignore_index=-100)
+lambda_reg = getattr(args, 'lambda_reg', 0.1)
 
 logger = {}
 logger['loss_train'] = []
 logger['loss_test'] = []
 logger['acc_train'] = []
 logger['acc_test'] = []
+logger['loss_cls_train'] = []
+logger['loss_cls_test'] = []
+logger['loss_reg_train'] = []
+logger['loss_reg_test'] = []
 logger['time'] = []
 
 def build_t_mask(output):
@@ -192,31 +198,28 @@ def build_t_mask(output):
 #         target_discrete = target_discrete.squeeze(1)
 #     return target_discrete
 
-def continuous_to_discrete(target_continuous, thresholds=[0.1, 0.4, 0.7]):
-    """
-    按当前样本最大值的比例（10%, 40%, 70%）进行离散化
-    """
+def continuous_to_discrete(target_continuous, thresholds=None):
+    if thresholds is None:
+        thresholds = getattr(args, 'cls_thresholds', [0.02, 0.08, 0.15])
     target_discrete = torch.zeros_like(target_continuous, dtype=torch.long)
     B = target_continuous.shape[0]
     
     for i in range(B):
-        # 找到这单张图里的最大浓度值（clamp防止除以0）
-        max_val = target_continuous[i].max().clamp(min=1e-8) 
-        
-        # 按照这张图最大值的比例来切分
-        t0 = thresholds[0] * max_val
-        t1 = thresholds[1] * max_val
-        t2 = thresholds[2] * max_val
-        
-        # 阶梯状赋值
-        target_discrete[i, target_continuous[i] >= t0] = 1
-        target_discrete[i, target_continuous[i] >= t1] = 2
-        target_discrete[i, target_continuous[i] >= t2] = 3
+        for cls_idx, th in enumerate(thresholds, start=1):
+            target_discrete[i, target_continuous[i] >= th] = cls_idx
         
     if target_discrete.dim() >= 2 and target_discrete.shape[1] == 1:
         target_discrete = target_discrete.squeeze(1)
         
     return target_discrete
+
+
+def select_target_channel(target):
+    if target.dim() >= 2 and target.shape[1] > 1:
+        channel_idx = int(getattr(args, 'target_channel', 0))
+        channel_idx = max(0, min(channel_idx, target.shape[1] - 1))
+        return target[:, channel_idx:channel_idx + 1, ...]
+    return target
 
 
 def apply_ignore_index_with_t_mask(target_discrete, output):
@@ -225,7 +228,7 @@ def apply_ignore_index_with_t_mask(target_discrete, output):
     if t_mask_bool.shape[0] == 1 and target_discrete.shape[0] > 1:
         t_mask_bool = t_mask_bool.expand(target_discrete.shape[0], *t_mask_bool.shape[1:])
     target_discrete[~t_mask_bool] = -100
-    return target_discrete
+    return target_discrete, t_mask_bool
 
 
 def compute_gradient_loss(output, target, mask=None):
@@ -270,18 +273,34 @@ def compute_gradient_loss(output, target, mask=None):
 def test(epoch):#epoch is a number
     model.eval()
     total_loss = 0.
+    total_loss_cls = 0.
+    total_loss_reg = 0.
     correct_pixels = 0
     total_valid_pixels = 0
     for batch_idx, (input, target) in enumerate(test_loader):
         input, target = input.to(device), target.to(device)
         output = model(input)
 
-        target_discrete = continuous_to_discrete(target)
-        target_discrete = apply_ignore_index_with_t_mask(target_discrete, output)
-        loss = criterion(output, target_discrete)
-        total_loss += loss.item()
+        out_class = output[:, :num_classes, ...]
+        out_reg = output[:, num_classes:num_classes + 1, ...]
+        target_continuous = select_target_channel(target)
 
-        preds = torch.argmax(output, dim=1)
+        target_discrete = continuous_to_discrete(target_continuous)
+        target_discrete, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete, out_class)
+
+        loss_cls = criterion_ce(out_class, target_discrete)
+        t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
+        if t_mask_reg_bool.any():
+            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_continuous[t_mask_reg_bool])
+        else:
+            loss_reg = torch.tensor(0.0, device=output.device)
+        loss = loss_cls + lambda_reg * loss_reg
+
+        total_loss += loss.item()
+        total_loss_cls += loss_cls.item()
+        total_loss_reg += loss_reg.item()
+
+        preds = torch.argmax(out_class, dim=1)
         valid_mask = (target_discrete != -100)
         correct_pixels += (preds[valid_mask] == target_discrete[valid_mask]).sum().item()
         total_valid_pixels += valid_mask.sum().item()
@@ -303,15 +322,22 @@ def test(epoch):#epoch is a number
 
     acc = correct_pixels / total_valid_pixels if total_valid_pixels > 0 else 0.0
     avg_loss = total_loss / len(test_loader)
-    print("epoch: {}, test loss: {:.4f}, test accuracy: {:.2f}%".format(epoch, avg_loss, acc * 100))
+    avg_loss_cls = total_loss_cls / len(test_loader)
+    avg_loss_reg = total_loss_reg / len(test_loader)
+    print("epoch: {}, test loss: {:.4f} (cls: {:.4f}, reg: {:.4f}), test accuracy: {:.2f}%".format(
+        epoch, avg_loss, avg_loss_cls, avg_loss_reg, acc * 100))
 
     if epoch % args.log_freq == 0:
         logger['loss_test'].append(avg_loss)
         logger['acc_test'].append(acc)
+        logger['loss_cls_test'].append(avg_loss_cls)
+        logger['loss_reg_test'].append(avg_loss_reg)
 
 def train(epoch):
     model.train()
     total_loss = 0.
+    total_loss_cls = 0.
+    total_loss_reg = 0.
     correct_pixels = 0
     total_valid_pixels = 0
     for _, (input, target) in enumerate(train_loader):
@@ -319,28 +345,46 @@ def train(epoch):
         model.zero_grad()
         output = model(input)
 
-        target_discrete = continuous_to_discrete(target)
-        target_discrete = apply_ignore_index_with_t_mask(target_discrete, output)
+        out_class = output[:, :num_classes, ...]
+        out_reg = output[:, num_classes:num_classes + 1, ...]
+        target_continuous = select_target_channel(target)
 
-        loss = criterion(output, target_discrete)
+        target_discrete = continuous_to_discrete(target_continuous)
+        target_discrete, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete, out_class)
+
+        loss_cls = criterion_ce(out_class, target_discrete)
+        t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
+        if t_mask_reg_bool.any():
+            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_continuous[t_mask_reg_bool])
+        else:
+            loss_reg = torch.tensor(0.0, device=output.device)
+        loss = loss_cls + lambda_reg * loss_reg
+
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
+        total_loss_cls += loss_cls.item()
+        total_loss_reg += loss_reg.item()
         with torch.no_grad():
-            preds = torch.argmax(output, dim=1)
+            preds = torch.argmax(out_class, dim=1)
             valid_mask = (target_discrete != -100)
             correct_pixels += (preds[valid_mask] == target_discrete[valid_mask]).sum().item()
             total_valid_pixels += valid_mask.sum().item()
 
     avg_loss = total_loss / len(train_loader)
+    avg_loss_cls = total_loss_cls / len(train_loader)
+    avg_loss_reg = total_loss_reg / len(train_loader)
     scheduler.step(avg_loss)
     acc = correct_pixels / total_valid_pixels if total_valid_pixels > 0 else 0.0
-    print("epoch: {}, training loss: {:.4f}, accuracy: {:.2f}%".format(epoch, avg_loss, acc * 100))
+    print("epoch: {}, training loss: {:.4f} (cls: {:.4f}, reg: {:.4f}), accuracy: {:.2f}%".format(
+        epoch, avg_loss, avg_loss_cls, avg_loss_reg, acc * 100))
 
     if epoch % args.log_freq == 0:
         logger['loss_train'].append(avg_loss)
         logger['acc_train'].append(acc)
+        logger['loss_cls_train'].append(avg_loss_cls)
+        logger['loss_reg_train'].append(avg_loss_reg)
     # save model
     if epoch % args.ckpt_freq == 0:
         torch.save(model.state_dict(), args.ckpt_dir + "/model_epoch{}.pth".format(epoch))
