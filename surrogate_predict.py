@@ -46,8 +46,8 @@ def parse_args():
 	p.add_argument('--limit', type=int, default=None, help='Limit number of samples to predict (debug)')
 	p.add_argument('--out-file', type=str, default=None, help='Output file (.hdf5 or .npz) to save predictions')
 	p.add_argument('--device', type=str, default=None, help='Device override, e.g. cuda:0 or cpu')
-	p.add_argument('--save-mode', type=str, default='auto', choices=['auto', 'logits', 'class'],
-			   help='How to save predictions: logits (raw model output), class (argmax labels), or auto')
+	p.add_argument('--save-mode', type=str, default='auto', choices=['auto', 'logits', 'class', 'reg'],
+			   help='How to save predictions: reg (continuous regression), logits (raw model output), class (argmax labels), or auto')
 
 	args = p.parse_args()
 
@@ -161,7 +161,7 @@ def main():
 	target_c = sample_y.shape[0] if sample_y.ndim >= 1 else 1
 	if args.save_mode == 'auto':
 		if target_c == 1 and model_c > 1:
-			save_mode = 'class'
+			save_mode = 'reg'
 		else:
 			save_mode = 'logits'
 	else:
@@ -170,6 +170,9 @@ def main():
 	if save_mode == 'class':
 		pred_shape = (n_total, 1) + tuple(sample_pred.shape[2:])
 		preds = np.zeros(pred_shape, dtype=np.int64)
+	elif save_mode == 'reg':
+		pred_shape = (n_total, 1) + tuple(sample_pred.shape[2:])
+		preds = np.zeros(pred_shape, dtype=np.float32)
 	else:
 		pred_shape = (n_total,) + tuple(sample_pred.shape[1:])
 		preds = np.zeros(pred_shape, dtype=np.float32)
@@ -184,6 +187,12 @@ def main():
 			y_pred = model(x).detach().cpu().numpy()
 			if save_mode == 'class':
 				y_pred = np.argmax(y_pred, axis=1, keepdims=True)
+			elif save_mode == 'reg':
+				if y_pred.shape[1] > 1:
+					y_pred = y_pred[:, -1:, ...]
+				else:
+					y_pred = y_pred[:, :1, ...]
+				y_pred = np.maximum(y_pred, 0.0)
 			bs = y_pred.shape[0]
 			end = min(idx_write + bs, n_total)
 			preds[idx_write:end] = y_pred[:(end - idx_write)]
