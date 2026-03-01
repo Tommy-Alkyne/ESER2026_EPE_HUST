@@ -157,7 +157,7 @@ class_weights = torch.tensor(getattr(args, 'class_weights', [1.0, 2.0, 4.0, 8.0]
 criterion_ce = nn.CrossEntropyLoss(
     weight=class_weights, 
     ignore_index=-100)
-lambda_reg = getattr(args, 'lambda_reg', 0.1)
+lambda_reg = getattr(args, 'lambda_reg', 5.0)
 
 logger = {}
 logger['loss_train'] = []
@@ -286,7 +286,7 @@ def test(epoch):#epoch is a number
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]
-        out_reg = torch.relu(out_reg)
+        out_reg = torch.abs(out_reg)
         target_continuous = select_target_channel(target)
 
         target_discrete = continuous_to_discrete(target_continuous)
@@ -351,7 +351,7 @@ def train(epoch):
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]
-        out_reg = torch.relu(out_reg)
+        out_reg = torch.abs(out_reg)
         target_continuous = select_target_channel(target)
 
         target_discrete = continuous_to_discrete(target_continuous)
@@ -366,6 +366,7 @@ def train(epoch):
         loss = loss_cls + lambda_reg * loss_reg
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         total_loss += loss.item()
