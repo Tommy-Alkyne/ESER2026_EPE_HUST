@@ -184,30 +184,42 @@ def main():
 			if args.limit is not None and idx_write >= args.limit:
 				break
 			x = x.to(device)
-			y_pred = model(x).detach().cpu().numpy()
+			# 拿到包含 5 个通道的完整输出 (B, 5, D, H, W)
+			y_pred_full = model(x).detach().cpu().numpy()
+
 			if save_mode == 'class':
-				y_pred = np.argmax(y_pred, axis=1, keepdims=True)
+				y_pred = np.argmax(y_pred_full, axis=1, keepdims=True)
 			elif save_mode == 'reg':
-				if y_pred.shape[1] > 1:
-					y_pred = y_pred[:, -1:, ...]
+				if y_pred_full.shape[1] > 1:
+					# ====== 混合双打模式的核心逻辑 ======
+					out_class = y_pred_full[:, :-1, ...]  # 前四个通道是分类 logits
+					out_reg = y_pred_full[:, -1:, ...]    # 最后一个是回归通道
+
+					# 1. 修复元凶 1：必须用 abs()，坚决不用 np.maximum！
+					y_pred = np.abs(out_reg)
+
+					# 2. 修复元凶 2：重新找回神级剪裁蒙版！
+					class_preds = np.argmax(out_class, axis=1, keepdims=True)
+					y_pred[class_preds == 0] = 0.0  # 分类认为是背景的地方，浓度强行置 0
+					# ==================================
 				else:
-					y_pred = y_pred[:, :1, ...]
-				y_pred = np.maximum(y_pred, 0.0)
+					y_pred = np.abs(y_pred_full)
+			else:
+				y_pred = y_pred_full
 			bs = y_pred.shape[0]
 			end = min(idx_write + bs, n_total)
 			preds[idx_write:end] = y_pred[:(end - idx_write)]
 			idx_write = end
 
 	# Apply T-mask: zero-out regions outside the two rectangles
-	if preds.ndim in (4, 5):
+	# 修复 NumPy 切片语法的潜在 Bug
+	if preds.ndim >= 2:
 		h, w = preds.shape[-2:]
 		mask = np.zeros((h, w), dtype=bool)
 		mask[0:136, 0:35] = True
 		mask[51:87, 35:137] = True
-		if preds.ndim == 4:
-			preds[..., ~mask] = 0.0
-		else:
-			preds[..., :, ~mask] = 0.0
+		# 这一句不论是 4D 还是 5D，都能完美应用在最后两维上
+		preds[..., ~mask] = 0.0
 
 	# Determine output file path
 	if args.out_file is None:
