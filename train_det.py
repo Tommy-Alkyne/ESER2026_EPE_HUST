@@ -217,6 +217,22 @@ def continuous_to_discrete(target_continuous, thresholds=[0.1, 0.4, 0.7]):
     return target_discrete
 
 
+def compute_bin_centers(target_continuous, center_ratios=[0.05, 0.25, 0.55, 0.85]):
+    B = target_continuous.shape[0]
+    max_vals = target_continuous.reshape(B, -1).max(dim=1).values.clamp(min=1e-8)
+    ratios = torch.tensor(center_ratios, device=target_continuous.device, dtype=target_continuous.dtype)
+    return max_vals.unsqueeze(1) * ratios.unsqueeze(0)
+
+
+def labels_to_centers(labels, bin_centers):
+    labels_safe = labels.clamp(min=0, max=bin_centers.shape[1] - 1)
+    B = labels_safe.shape[0]
+    flat_labels = labels_safe.reshape(B, -1)
+    flat_centers = torch.gather(bin_centers, 1, flat_labels)
+    centers = flat_centers.reshape(labels_safe.shape).unsqueeze(1)
+    return centers
+
+
 def select_target_channel(target):
     if target.dim() >= 2 and target.shape[1] > 1:
         channel_idx = int(getattr(args, 'target_channel', 0))
@@ -286,16 +302,19 @@ def test(epoch):#epoch is a number
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]
-        out_reg = torch.abs(out_reg)
         target_continuous = select_target_channel(target)
 
         target_discrete = continuous_to_discrete(target_continuous)
-        target_discrete, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete, out_class)
+        bin_centers = compute_bin_centers(target_continuous)
+        target_center = labels_to_centers(target_discrete, bin_centers)
+        target_residual = target_continuous - target_center
+        target_discrete_ce = target_discrete.clone()
+        target_discrete_ce, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete_ce, out_class)
 
-        loss_cls = criterion_ce(out_class, target_discrete)
+        loss_cls = criterion_ce(out_class, target_discrete_ce)
         t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
         if t_mask_reg_bool.any():
-            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_continuous[t_mask_reg_bool])
+            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_residual[t_mask_reg_bool])
         else:
             loss_reg = torch.tensor(0.0, device=output.device)
         loss = loss_cls + lambda_reg * loss_reg
@@ -305,8 +324,10 @@ def test(epoch):#epoch is a number
         total_loss_reg += loss_reg.item()
 
         preds = torch.argmax(out_class, dim=1)
-        valid_mask = (target_discrete != -100)
-        correct_pixels += (preds[valid_mask] == target_discrete[valid_mask]).sum().item()
+        pred_center = labels_to_centers(preds, bin_centers)
+        pred_continuous = pred_center + out_reg
+        valid_mask = (target_discrete_ce != -100)
+        correct_pixels += (preds[valid_mask] == target_discrete_ce[valid_mask]).sum().item()
         total_valid_pixels += valid_mask.sum().item()
 
         # plot predictions
@@ -314,9 +335,9 @@ def test(epoch):#epoch is a number
             n_samples = 6 if epoch == args.epochs else 2
             idx = torch.randperm(input.size(0))[:n_samples]
 
-            out_reg_plot = out_reg.clone()
-            out_reg_plot[~t_mask_reg_bool] = 0.0
-            samples_output = out_reg_plot.data.cpu()[idx].numpy()
+            pred_continuous_plot = pred_continuous.clone()
+            pred_continuous_plot[~t_mask_reg_bool] = 0.0
+            samples_output = pred_continuous_plot.data.cpu()[idx].numpy()
             samples_target = target_continuous.data.cpu()[idx].numpy()
 
             for i in range(n_samples):
@@ -351,16 +372,19 @@ def train(epoch):
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]
-        out_reg = torch.abs(out_reg)
         target_continuous = select_target_channel(target)
 
         target_discrete = continuous_to_discrete(target_continuous)
-        target_discrete, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete, out_class)
+        bin_centers = compute_bin_centers(target_continuous)
+        target_center = labels_to_centers(target_discrete, bin_centers)
+        target_residual = target_continuous - target_center
+        target_discrete_ce = target_discrete.clone()
+        target_discrete_ce, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete_ce, out_class)
 
-        loss_cls = criterion_ce(out_class, target_discrete)
+        loss_cls = criterion_ce(out_class, target_discrete_ce)
         t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
         if t_mask_reg_bool.any():
-            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_continuous[t_mask_reg_bool])
+            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_residual[t_mask_reg_bool])
         else:
             loss_reg = torch.tensor(0.0, device=output.device)
         loss = loss_cls + lambda_reg * loss_reg
@@ -374,8 +398,8 @@ def train(epoch):
         total_loss_reg += loss_reg.item()
         with torch.no_grad():
             preds = torch.argmax(out_class, dim=1)
-            valid_mask = (target_discrete != -100)
-            correct_pixels += (preds[valid_mask] == target_discrete[valid_mask]).sum().item()
+            valid_mask = (target_discrete_ce != -100)
+            correct_pixels += (preds[valid_mask] == target_discrete_ce[valid_mask]).sum().item()
             total_valid_pixels += valid_mask.sum().item()
 
     avg_loss = total_loss / len(train_loader)
