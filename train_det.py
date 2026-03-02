@@ -158,6 +158,7 @@ criterion_ce = nn.CrossEntropyLoss(
     weight=class_weights, 
     ignore_index=-100)
 lambda_reg = getattr(args, 'lambda_reg', 5.0)
+lambda_grad = getattr(args, 'lambda_grad', 0.0)
 
 logger = {}
 logger['loss_train'] = []
@@ -168,6 +169,8 @@ logger['loss_cls_train'] = []
 logger['loss_cls_test'] = []
 logger['loss_reg_train'] = []
 logger['loss_reg_test'] = []
+logger['loss_grad_train'] = []
+logger['loss_grad_test'] = []
 logger['time'] = []
 
 def build_t_mask(output):
@@ -294,6 +297,7 @@ def test(epoch):#epoch is a number
     total_loss = 0.
     total_loss_cls = 0.
     total_loss_reg = 0.
+    total_loss_grad = 0.
     correct_pixels = 0
     total_valid_pixels = 0
     for batch_idx, (input, target) in enumerate(test_loader):
@@ -313,15 +317,23 @@ def test(epoch):#epoch is a number
 
         loss_cls = criterion_ce(out_class, target_discrete_ce)
         t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
+        pred_continuous_for_loss = target_center + out_reg
         if t_mask_reg_bool.any():
             loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_residual[t_mask_reg_bool])
+            loss_grad = compute_gradient_loss(
+                pred_continuous_for_loss,
+                target_continuous,
+                mask=t_mask_reg_bool.float()
+            ) / t_mask_reg_bool.sum().float().clamp(min=1.0)
         else:
             loss_reg = torch.tensor(0.0, device=output.device)
-        loss = loss_cls + lambda_reg * loss_reg
+            loss_grad = torch.tensor(0.0, device=output.device)
+        loss = loss_cls + lambda_reg * loss_reg + lambda_grad * loss_grad
 
         total_loss += loss.item()
         total_loss_cls += loss_cls.item()
         total_loss_reg += loss_reg.item()
+        total_loss_grad += loss_grad.item()
 
         preds = torch.argmax(out_class, dim=1)
         pred_center = labels_to_centers(preds, bin_centers)
@@ -349,20 +361,23 @@ def test(epoch):#epoch is a number
     avg_loss = total_loss / len(test_loader)
     avg_loss_cls = total_loss_cls / len(test_loader)
     avg_loss_reg = total_loss_reg / len(test_loader)
-    print("epoch: {}, test loss: {:.4f} (cls: {:.4f}, reg: {:.4f}), test accuracy: {:.2f}%".format(
-        epoch, avg_loss, avg_loss_cls, avg_loss_reg, acc * 100))
+    avg_loss_grad = total_loss_grad / len(test_loader)
+    print("epoch: {}, test loss: {:.4f} (cls: {:.4f}, reg: {:.4f}, grad: {:.4f}), test accuracy: {:.2f}%".format(
+        epoch, avg_loss, avg_loss_cls, avg_loss_reg, avg_loss_grad, acc * 100))
 
     if epoch % args.log_freq == 0:
         logger['loss_test'].append(avg_loss)
         logger['acc_test'].append(acc)
         logger['loss_cls_test'].append(avg_loss_cls)
         logger['loss_reg_test'].append(avg_loss_reg)
+        logger['loss_grad_test'].append(avg_loss_grad)
 
 def train(epoch):
     model.train()
     total_loss = 0.
     total_loss_cls = 0.
     total_loss_reg = 0.
+    total_loss_grad = 0.
     correct_pixels = 0
     total_valid_pixels = 0
     for _, (input, target) in enumerate(train_loader):
@@ -383,11 +398,18 @@ def train(epoch):
 
         loss_cls = criterion_ce(out_class, target_discrete_ce)
         t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
+        pred_continuous_for_loss = target_center + out_reg
         if t_mask_reg_bool.any():
             loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_residual[t_mask_reg_bool])
+            loss_grad = compute_gradient_loss(
+                pred_continuous_for_loss,
+                target_continuous,
+                mask=t_mask_reg_bool.float()
+            ) / t_mask_reg_bool.sum().float().clamp(min=1.0)
         else:
             loss_reg = torch.tensor(0.0, device=output.device)
-        loss = loss_cls + lambda_reg * loss_reg
+            loss_grad = torch.tensor(0.0, device=output.device)
+        loss = loss_cls + lambda_reg * loss_reg + lambda_grad * loss_grad
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -396,6 +418,7 @@ def train(epoch):
         total_loss += loss.item()
         total_loss_cls += loss_cls.item()
         total_loss_reg += loss_reg.item()
+        total_loss_grad += loss_grad.item()
         with torch.no_grad():
             preds = torch.argmax(out_class, dim=1)
             valid_mask = (target_discrete_ce != -100)
@@ -405,16 +428,18 @@ def train(epoch):
     avg_loss = total_loss / len(train_loader)
     avg_loss_cls = total_loss_cls / len(train_loader)
     avg_loss_reg = total_loss_reg / len(train_loader)
+    avg_loss_grad = total_loss_grad / len(train_loader)
     scheduler.step(avg_loss)
     acc = correct_pixels / total_valid_pixels if total_valid_pixels > 0 else 0.0
-    print("epoch: {}, training loss: {:.4f} (cls: {:.4f}, reg: {:.4f}), accuracy: {:.2f}%".format(
-        epoch, avg_loss, avg_loss_cls, avg_loss_reg, acc * 100))
+    print("epoch: {}, training loss: {:.4f} (cls: {:.4f}, reg: {:.4f}, grad: {:.4f}), accuracy: {:.2f}%".format(
+        epoch, avg_loss, avg_loss_cls, avg_loss_reg, avg_loss_grad, acc * 100))
 
     if epoch % args.log_freq == 0:
         logger['loss_train'].append(avg_loss)
         logger['acc_train'].append(acc)
         logger['loss_cls_train'].append(avg_loss_cls)
         logger['loss_reg_train'].append(avg_loss_reg)
+        logger['loss_grad_train'].append(avg_loss_grad)
     # save model
     if epoch % args.ckpt_freq == 0:
         torch.save(model.state_dict(), args.ckpt_dir + "/model_epoch{}.pth".format(epoch))
