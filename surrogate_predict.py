@@ -48,6 +48,12 @@ def parse_args():
 	p.add_argument('--device', type=str, default=None, help='Device override, e.g. cuda:0 or cpu')
 	p.add_argument('--save-mode', type=str, default='auto', choices=['auto', 'logits', 'class', 'reg'],
 			   help='How to save predictions: reg (continuous regression), logits (raw model output), class (argmax labels), or auto')
+	p.add_argument('--bin-center-ratios', nargs='+', type=float, default=[0.05, 0.25, 0.55, 0.85],
+			   help='Relative bin center ratios for class-center + residual reconstruction')
+	p.add_argument('--center-max-source', type=str, default='fixed', choices=['fixed', 'target'],
+			   help='How to get absolute max for bin centers in reg mode: fixed uses --center-max-value, target uses batch target max')
+	p.add_argument('--center-max-value', type=float, default=1.0,
+			   help='Absolute max value used when --center-max-source=fixed')
 
 	args = p.parse_args()
 
@@ -180,7 +186,7 @@ def main():
 	# Iterate and predict
 	idx_write = 0
 	with torch.no_grad():
-		for batch_idx, (x, _) in enumerate(loader):
+		for batch_idx, (x, y_true) in enumerate(loader):
 			if args.limit is not None and idx_write >= args.limit:
 				break
 			x = x.to(device)
@@ -191,19 +197,34 @@ def main():
 				y_pred = np.argmax(y_pred_full, axis=1, keepdims=True)
 			elif save_mode == 'reg':
 				if y_pred_full.shape[1] > 1:
-					# ====== 混合双打模式的核心逻辑 ======
 					out_class = y_pred_full[:, :-1, ...]  # 前四个通道是分类 logits
-					out_reg = y_pred_full[:, -1:, ...]    # 最后一个是回归通道
-
-					# 1. 修复元凶 1：必须用 abs()，坚决不用 np.maximum！
-					y_pred = np.abs(out_reg)
-
-					# 2. 修复元凶 2：重新找回神级剪裁蒙版！
+					out_reg = y_pred_full[:, -1:, ...]    # 最后一个是残差回归通道
 					class_preds = np.argmax(out_class, axis=1, keepdims=True)
-					y_pred[class_preds == 0] = 0.0  # 分类认为是背景的地方，浓度强行置 0
-					# ==================================
+					num_classes = out_class.shape[1]
+					if len(args.bin_center_ratios) != num_classes:
+						raise ValueError(
+							'`--bin-center-ratios` length ({}) must equal number of class channels ({})'.format(
+								len(args.bin_center_ratios), num_classes
+							)
+						)
+
+					if args.center_max_source == 'target':
+						y_true_np = y_true.detach().cpu().numpy()
+						if y_true_np.ndim < 2:
+							raise ValueError('target tensor shape is invalid for center-max-source=target')
+						y_true_first = y_true_np[:, :1, ...]
+						batch_max = np.maximum(y_true_first.reshape(y_true_first.shape[0], -1).max(axis=1), 1e-8).astype(np.float32)
+					else:
+						batch_max = np.full((out_reg.shape[0],), max(float(args.center_max_value), 1e-8), dtype=np.float32)
+
+					center_ratios = np.array(args.bin_center_ratios, dtype=np.float32)
+					bin_centers = batch_max[:, None] * center_ratios[None, :]  # (B, C)
+					flat_class = class_preds.reshape(class_preds.shape[0], -1)
+					flat_centers = np.take_along_axis(bin_centers, flat_class, axis=1)
+					pred_center = flat_centers.reshape(class_preds.shape).astype(np.float32)
+					y_pred = pred_center + out_reg
 				else:
-					y_pred = np.abs(y_pred_full)
+					y_pred = y_pred_full
 			else:
 				y_pred = y_pred_full
 			bs = y_pred.shape[0]
