@@ -201,30 +201,34 @@ def build_t_mask(output):
 #         target_discrete = target_discrete.squeeze(1)
 #     return target_discrete
 
-def continuous_to_discrete(target_continuous, thresholds=[0.1, 0.4, 0.7]):
+def continuous_to_discrete(target_continuous, thresholds=None):
+    if thresholds is None:
+        thresholds = getattr(args, 'cls_thresholds', [0.1, 0.4, 0.7])
     target_discrete = torch.zeros_like(target_continuous, dtype=torch.long)
     B = target_continuous.shape[0]
-    
+
     for i in range(B):
         max_val = target_continuous[i].max().clamp(min=1e-8)
-        t0 = thresholds[0] * max_val
-        t1 = thresholds[1] * max_val
-        t2 = thresholds[2] * max_val
-        target_discrete[i, target_continuous[i] >= t0] = 1
-        target_discrete[i, target_continuous[i] >= t1] = 2
-        target_discrete[i, target_continuous[i] >= t2] = 3
-        
+        for class_idx, threshold in enumerate(thresholds, start=1):
+            target_discrete[i, target_continuous[i] >= threshold * max_val] = class_idx
+
     if target_discrete.dim() >= 2 and target_discrete.shape[1] == 1:
         target_discrete = target_discrete.squeeze(1)
-        
+
     return target_discrete
 
 
-def compute_bin_centers(target_continuous, center_ratios=[0.05, 0.25, 0.55, 0.85]):
+def compute_bin_centers(target_continuous, thresholds=None):
+    if thresholds is None:
+        thresholds = getattr(args, 'cls_thresholds', [0.1, 0.4, 0.7])
     B = target_continuous.shape[0]
     max_vals = target_continuous.reshape(B, -1).max(dim=1).values.clamp(min=1e-8)
-    ratios = torch.tensor(center_ratios, device=target_continuous.device, dtype=target_continuous.dtype)
-    return max_vals.unsqueeze(1) * ratios.unsqueeze(0)
+    threshold_ratios = torch.tensor(thresholds, device=target_continuous.device, dtype=target_continuous.dtype)
+    abs_thresholds = max_vals.unsqueeze(1) * threshold_ratios.unsqueeze(0)
+
+    left_edges = torch.cat([torch.zeros((B, 1), device=target_continuous.device, dtype=target_continuous.dtype), abs_thresholds], dim=1)
+    right_edges = torch.cat([abs_thresholds, max_vals.unsqueeze(1)], dim=1)
+    return 0.5 * (left_edges + right_edges)
 
 
 def labels_to_centers(labels, bin_centers):
