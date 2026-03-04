@@ -56,7 +56,7 @@ class Parser(argparse.ArgumentParser):
         self.add_argument('--ckpt-epoch', type=int, default=None, help='which epoch of checkpoints to be loaded in post mode')
         self.add_argument('--ckpt-freq', type=int, default=25, help='how many epochs to wait before saving model')
         self.add_argument('--log-freq', type=int, default=2, help='how many epochs to wait before logging training status')
-        self.add_argument('--plot-freq', type=int, default=100, help='how many epochs to wait before plotting test output')
+        self.add_argument('--plot-freq', type=int, default=25, help='how many epochs to wait before plotting test output')
         self.add_argument('--plot-fn', type=str, default='contourf', choices=['contourf', 'imshow'], help='plotting method')
 
 
