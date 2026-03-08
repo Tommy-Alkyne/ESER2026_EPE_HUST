@@ -140,7 +140,7 @@ model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=num_classes + 
                 bn_size=args.bn_size,
                 bottleneck=args.bottleneck,
                 out_activation=None,
-                output_size=tuple(getattr(args, 'image_size', [1, 65, 65])) if getattr(args, 'ndim', 2) == 3 else None).to(device)
+                output_size=None if getattr(args, 'ndim', 2) == 3 else None).to(device)
 print(model)
 
 train_loader, train_stats = load_data(train_data_dir, args.batch_size)
@@ -190,6 +190,44 @@ def build_t_mask(output):
         d = output.shape[-3]
         return mask_2d.unsqueeze(0).unsqueeze(0).unsqueeze(2).repeat(1, 1, d, 1, 1)
     raise ValueError('Unsupported output dim {}'.format(output.dim()))
+
+
+def pad_hw_to_multiple(x, multiple=16, mode='replicate'):
+    """Pad H/W to the next multiple and return crop slices for restoration."""
+    if x.dim() not in (4, 5):
+        raise ValueError('Unsupported input dim {}'.format(x.dim()))
+
+    h, w = x.shape[-2], x.shape[-1]
+    pad_h_total = (multiple - h % multiple) % multiple
+    pad_w_total = (multiple - w % multiple) % multiple
+
+    pad_top = pad_h_total // 2
+    pad_bottom = pad_h_total - pad_top
+    pad_left = pad_w_total // 2
+    pad_right = pad_w_total - pad_left
+
+    if x.dim() == 5:
+        pad_dims = (pad_left, pad_right, pad_top, pad_bottom, 0, 0)
+    else:
+        pad_dims = (pad_left, pad_right, pad_top, pad_bottom)
+
+    x_padded = F.pad(x, pad_dims, mode=mode)
+    h_slice = slice(pad_top, pad_top + h)
+    w_slice = slice(pad_left, pad_left + w)
+    return x_padded, h_slice, w_slice
+
+
+def maybe_pad_model_input(x):
+    """Only pad 3D training inputs; keep 2D path unchanged."""
+    if getattr(args, 'ndim', 2) != 3:
+        return x, None, None
+    return pad_hw_to_multiple(x, multiple=getattr(args, 'pad_multiple', 16), mode='replicate')
+
+
+def crop_model_output(output, h_slice, w_slice):
+    if h_slice is None or w_slice is None:
+        return output
+    return output[..., h_slice, w_slice]
 
 
 # def continuous_to_discrete(target_continuous, thresholds=[0.02, 0.08, 0.15]):
@@ -306,7 +344,9 @@ def test(epoch):#epoch is a number
     total_valid_pixels = 0
     for batch_idx, (input, target) in enumerate(test_loader):
         input, target = input.to(device), target.to(device)
-        output = model(input)
+        input_padded, h_slice, w_slice = maybe_pad_model_input(input)
+        output_padded = model(input_padded)
+        output = crop_model_output(output_padded, h_slice, w_slice)
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]
@@ -387,7 +427,9 @@ def train(epoch):
     for _, (input, target) in enumerate(train_loader):
         input, target = input.to(device), target.to(device)
         model.zero_grad()
-        output = model(input)
+        input_padded, h_slice, w_slice = maybe_pad_model_input(input)
+        output_padded = model(input_padded)
+        output = crop_model_output(output_padded, h_slice, w_slice)
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]

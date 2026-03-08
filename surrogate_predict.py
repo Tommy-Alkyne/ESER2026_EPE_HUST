@@ -18,6 +18,7 @@ import argparse
 import os
 import json
 import torch
+import torch.nn.functional as F
 import numpy as np
 import h5py
 
@@ -54,6 +55,8 @@ def parse_args():
 			   help='How to get absolute max for bin centers in reg mode: fixed uses --center-max-value, target uses batch target max')
 	p.add_argument('--center-max-value', type=float, default=1.0,
 			   help='Absolute max value used when --center-max-source=fixed')
+	p.add_argument('--pad-multiple', type=int, default=16,
+			   help='For 3D inference: pad H/W to this multiple before model forward, then crop back')
 
 	args = p.parse_args()
 
@@ -91,9 +94,39 @@ def _build_model(args, device):
 		bn_size=args.bn_size,
 		bottleneck=args.bottleneck,
 		out_activation=None,
-		output_size=getattr(args, 'output_size', None) if args.ndim == 3 else None,
+		output_size=None if args.ndim == 3 else None,
 	).to(device)
 	return model
+
+
+def _pad_hw_to_multiple_torch(x, multiple=16, mode='replicate'):
+	"""Pad tensor H/W to next multiple and return crop slices for restoration."""
+	if x.dim() not in (4, 5):
+		raise ValueError('Unsupported tensor dim {}'.format(x.dim()))
+	h, w = x.shape[-2], x.shape[-1]
+	pad_h_total = (multiple - h % multiple) % multiple
+	pad_w_total = (multiple - w % multiple) % multiple
+	pad_top = pad_h_total // 2
+	pad_bottom = pad_h_total - pad_top
+	pad_left = pad_w_total // 2
+	pad_right = pad_w_total - pad_left
+	if x.dim() == 5:
+		pad_dims = (pad_left, pad_right, pad_top, pad_bottom, 0, 0)
+	else:
+		pad_dims = (pad_left, pad_right, pad_top, pad_bottom)
+	x_pad = F.pad(x, pad_dims, mode=mode)
+	h_slice = slice(pad_top, pad_top + h)
+	w_slice = slice(pad_left, pad_left + w)
+	return x_pad, h_slice, w_slice
+
+
+def _model_forward_with_optional_pad(model, x, ndim, pad_multiple=16):
+	"""Keep 2D path unchanged; 3D path uses pad->forward->crop for alignment."""
+	if ndim != 3:
+		return model(x)
+	x_pad, h_slice, w_slice = _pad_hw_to_multiple_torch(x, multiple=pad_multiple, mode='replicate')
+	y_pad = model(x_pad)
+	return y_pad[..., h_slice, w_slice]
 
 
 def _load_data(args):
@@ -148,11 +181,6 @@ def main():
 	if args.limit is not None:
 		n_total = min(n_total, args.limit)
 
-	# Align output size for 3D to match targets
-	if args.ndim == 3:
-		_, sample_y = loader.dataset[0]
-		args.output_size = tuple(sample_y.shape[-3:])
-
 	# Build and load model
 	model = _build_model(args, device)
 	model.load_state_dict(state)
@@ -162,7 +190,12 @@ def main():
 	# (robust to discrete models where out_channels may differ from dataset output channels)
 	sample_x, sample_y = loader.dataset[0]
 	with torch.no_grad():
-		sample_pred = model(sample_x.unsqueeze(0).to(device)).detach().cpu().numpy()
+		sample_pred = _model_forward_with_optional_pad(
+			model,
+			sample_x.unsqueeze(0).to(device),
+			args.ndim,
+			pad_multiple=args.pad_multiple,
+		).detach().cpu().numpy()
 	model_c = sample_pred.shape[1]
 	target_c = sample_y.shape[0] if sample_y.ndim >= 1 else 1
 	if args.save_mode == 'auto':
@@ -191,7 +224,12 @@ def main():
 				break
 			x = x.to(device)
 			# 拿到包含 5 个通道的完整输出 (B, 5, D, H, W)
-			y_pred_full = model(x).detach().cpu().numpy()
+			y_pred_full = _model_forward_with_optional_pad(
+				model,
+				x,
+				args.ndim,
+				pad_multiple=args.pad_multiple,
+			).detach().cpu().numpy()
 
 			if save_mode == 'class':
 				y_pred = np.argmax(y_pred_full, axis=1, keepdims=True)

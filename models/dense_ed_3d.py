@@ -19,6 +19,22 @@ import torch
 import torch.nn as nn
 
 
+def _conv3d_compat(in_channels, out_channels, kernel_size, stride=1, padding=0, bias=False):
+    """Use replicate padding when supported by runtime PyTorch, otherwise fallback."""
+    kwargs = dict(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        bias=bias,
+    )
+    try:
+        return nn.Conv3d(padding_mode='replicate', **kwargs)
+    except TypeError:
+        return nn.Conv3d(**kwargs)
+
+
 class _DenseLayer3D(nn.Sequential):
     def __init__(self, in_features, growth_rate, drop_rate=0., bn_size=8,
                  bottleneck=False):
@@ -31,12 +47,12 @@ class _DenseLayer3D(nn.Sequential):
             self.add_module('norm2', nn.BatchNorm3d(bn_size * growth_rate))
             self.add_module('relu2', nn.ReLU(inplace=True))
             # keep depth kernel 1 to avoid shrinking depth
-            self.add_module('conv2', nn.Conv3d(bn_size * growth_rate, growth_rate,
+            self.add_module('conv2', _conv3d_compat(bn_size * growth_rate, growth_rate,
                             kernel_size=(1,3,3), stride=1, padding=(0,1,1), bias=False))
         else:
             self.add_module('norm1', nn.BatchNorm3d(in_features))
             self.add_module('relu1', nn.ReLU(inplace=True))
-            self.add_module('conv1', nn.Conv3d(in_features, growth_rate,
+            self.add_module('conv1', _conv3d_compat(in_features, growth_rate,
                             kernel_size=(1,3,3), stride=1, padding=(0,1,1), bias=False))
         if drop_rate > 0:
             self.add_module('dropout', nn.Dropout3d(p=drop_rate))
@@ -72,12 +88,12 @@ class _Transition3D(nn.Sequential):
                 self.add_module('norm2', nn.BatchNorm3d(out_features))
                 self.add_module('relu2', nn.ReLU(inplace=True))
                 # downsample H,W by 2, keep depth unchanged (stride 1 on depth)
-                self.add_module('conv2', nn.Conv3d(out_features, out_features,
+                self.add_module('conv2', _conv3d_compat(out_features, out_features,
                     kernel_size=(1,3,3), stride=(1,2,2), padding=(0,1,1), bias=False))
                 if drop_rate > 0:
                     self.add_module('dropout2', nn.Dropout3d(p=drop_rate))
             else:
-                self.add_module('conv1', nn.Conv3d(in_features, out_features,
+                self.add_module('conv1', _conv3d_compat(in_features, out_features,
                     kernel_size=(1,3,3), stride=(1,2,2), padding=(0,1,1), bias=False))
                 if drop_rate > 0:
                     self.add_module('dropout1', nn.Dropout3d(p=drop_rate))
@@ -93,7 +109,7 @@ class _Transition3D(nn.Sequential):
                 self.add_module('relu2', nn.ReLU(inplace=True))
                 self.add_module('upsample2', nn.Upsample(
                     scale_factor=(1, 2, 2), mode='trilinear', align_corners=True))
-                self.add_module('conv2', nn.Conv3d(
+                self.add_module('conv2', _conv3d_compat(
                     out_features, out_features, kernel_size=(1,3,3),
                     stride=1, padding=(0,1,1), bias=False))
                 if drop_rate > 0:
@@ -101,7 +117,7 @@ class _Transition3D(nn.Sequential):
             else:
                 self.add_module('upsample1', nn.Upsample(
                     scale_factor=(1, 2, 2), mode='trilinear', align_corners=True))
-                self.add_module('conv1', nn.Conv3d(
+                self.add_module('conv1', _conv3d_compat(
                     out_features, out_features, kernel_size=(1,3,3),
                     stride=1, padding=(0,1,1), bias=False))
                 if drop_rate > 0:
@@ -130,7 +146,7 @@ def last_decoding(in_features, out_channels, kernel_size, stride, padding,
     op = _tuplize(output_padding)
     last_up.add_module('upsample2', nn.Upsample(
         scale_factor=s, mode='trilinear', align_corners=True))
-    last_up.add_module('conv2', nn.Conv3d(
+    last_up.add_module('conv2', _conv3d_compat(
         in_features // 2, out_channels, kernel_size=k,
         stride=1, padding=p, bias=bias))
     return last_up
@@ -148,8 +164,8 @@ class DenseED3D(nn.Module):
         dec_block_layers = blocks[len(blocks) // 2:]
 
         # First conv: keep depth kernel 1 so depth dimension unchanged
-        self.in_conv = nn.Conv3d(in_channels, init_features,
-                      kernel_size=(1,7,7), stride=(1,2,2), padding=(0,2,2), bias=False)
+        self.in_conv = _conv3d_compat(in_channels, init_features,
+                      kernel_size=(1,7,7), stride=(1,2,2), padding=(0,3,3), bias=False)
 
         self.enc_blocks = nn.ModuleList()
         self.trans_downs = nn.ModuleList()
@@ -200,7 +216,7 @@ class DenseED3D(nn.Module):
             num_features = in_features + num_layers * growth_rate
 
         self.last_trans_up = last_decoding(num_features, out_channels,
-                            kernel_size=(1,4,4), stride=(1,2,2), padding=(0,1,1),
+                            kernel_size=(1,3,3), stride=(1,2,2), padding=(0,1,1),
                             output_padding=(0,1,1), bias=False, drop_rate=drop_rate)
         if out_activation is not None:
             if out_activation in ['tanh', 'Tanh']:
