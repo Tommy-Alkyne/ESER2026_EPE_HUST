@@ -359,9 +359,16 @@ def test(epoch):#epoch is a number
         target_discrete_ce = target_discrete.clone()
         target_discrete_ce, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete_ce, out_class)
 
+        # Soft-argmax center for smoother gradient supervision field
+        probs = F.softmax(out_class, dim=1)
+        B_size, C_size = bin_centers.shape
+        view_shape = [B_size, C_size] + [1] * (out_class.dim() - 2)
+        bin_centers_expanded = bin_centers.view(*view_shape)
+        pred_center_soft = torch.sum(probs * bin_centers_expanded, dim=1, keepdim=True)
+
         loss_cls = criterion_ce(out_class, target_discrete_ce)
         t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
-        pred_continuous_for_loss = target_center + out_reg
+        pred_continuous_for_loss = pred_center_soft + out_reg
         if t_mask_reg_bool.any():
             loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_residual[t_mask_reg_bool])
             loss_grad = compute_gradient_loss(
