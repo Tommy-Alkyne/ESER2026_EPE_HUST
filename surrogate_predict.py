@@ -237,7 +237,6 @@ def main():
 				if y_pred_full.shape[1] > 1:
 					out_class = y_pred_full[:, :-1, ...]  # 前四个通道是分类 logits
 					out_reg = y_pred_full[:, -1:, ...]    # 最后一个是残差回归通道
-					class_preds = np.argmax(out_class, axis=1, keepdims=True)
 					num_classes = out_class.shape[1]
 					if len(args.bin_center_ratios) != num_classes:
 						raise ValueError(
@@ -257,10 +256,19 @@ def main():
 
 					center_ratios = np.array(args.bin_center_ratios, dtype=np.float32)
 					bin_centers = batch_max[:, None] * center_ratios[None, :]  # (B, C)
-					flat_class = class_preds.reshape(class_preds.shape[0], -1)
-					flat_centers = np.take_along_axis(bin_centers, flat_class, axis=1)
-					pred_center = flat_centers.reshape(class_preds.shape).astype(np.float32)
-					y_pred = pred_center + out_reg
+
+					# Soft-argmax style assembly: center = sum(p_k * c_k)
+					# stable softmax over class channel
+					logits = out_class - np.max(out_class, axis=1, keepdims=True)
+					exp_logits = np.exp(logits)
+					probs = exp_logits / np.maximum(np.sum(exp_logits, axis=1, keepdims=True), 1e-12)
+
+					# bin_centers: (B, C) -> (B, C, 1, 1[, 1]) for broadcasting
+					expand_shape = [bin_centers.shape[0], bin_centers.shape[1]] + [1] * (out_class.ndim - 2)
+					bin_centers_expanded = bin_centers.reshape(expand_shape)
+
+					pred_center_soft = np.sum(probs * bin_centers_expanded, axis=1, keepdims=True).astype(np.float32)
+					y_pred = pred_center_soft + out_reg
 				else:
 					y_pred = y_pred_full
 			else:

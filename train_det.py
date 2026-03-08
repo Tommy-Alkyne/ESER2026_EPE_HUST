@@ -379,9 +379,24 @@ def test(epoch):#epoch is a number
         total_loss_reg += loss_reg.item()
         total_loss_grad += loss_grad.item()
 
+        # ================== Soft-Argmax smooth assembly ==================
+        # 1) Keep argmax for classification accuracy metric
         preds = torch.argmax(out_class, dim=1)
-        pred_center = labels_to_centers(preds, bin_centers)
-        pred_continuous = pred_center + out_reg
+
+        # 2) Convert logits to probabilities
+        probs = F.softmax(out_class, dim=1)
+
+        # 3) Expand bin centers to match feature-map rank
+        B_size, C_size = bin_centers.shape
+        view_shape = [B_size, C_size] + [1] * (out_class.dim() - 2)
+        bin_centers_expanded = bin_centers.view(*view_shape)
+
+        # 4) Probability-weighted center (smooth baseline)
+        pred_center_soft = torch.sum(probs * bin_centers_expanded, dim=1, keepdim=True)
+
+        # 5) Add residual branch for final continuous prediction
+        pred_continuous = pred_center_soft + out_reg
+        # ===============================================================
         valid_mask = (target_discrete_ce != -100)
         correct_pixels += (preds[valid_mask] == target_discrete_ce[valid_mask]).sum().item()
         total_valid_pixels += valid_mask.sum().item()
@@ -466,7 +481,25 @@ def train(epoch):
         total_loss_reg += loss_reg.item()
         total_loss_grad += loss_grad.item()
         with torch.no_grad():
+            # ================== Soft-Argmax smooth assembly ==================
+            # 1) Keep argmax for classification accuracy metric
             preds = torch.argmax(out_class, dim=1)
+
+            # 2) Convert logits to probabilities
+            probs = F.softmax(out_class, dim=1)
+
+            # 3) Expand bin centers to match feature-map rank
+            B_size, C_size = bin_centers.shape
+            view_shape = [B_size, C_size] + [1] * (out_class.dim() - 2)
+            bin_centers_expanded = bin_centers.view(*view_shape)
+
+            # 4) Probability-weighted center (smooth baseline)
+            pred_center_soft = torch.sum(probs * bin_centers_expanded, dim=1, keepdim=True)
+
+            # 5) Add residual branch for final continuous prediction
+            pred_continuous = pred_center_soft + out_reg
+            # ===============================================================
+
             valid_mask = (target_discrete_ce != -100)
             correct_pixels += (preds[valid_mask] == target_discrete_ce[valid_mask]).sum().item()
             total_valid_pixels += valid_mask.sum().item()
