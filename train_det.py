@@ -120,10 +120,18 @@ if getattr(args, 'ndim', 2) == 3:
                     args.nic += f['sensor_input'].shape[1]
             elif 'input' in f:
                 x_shape = f['input'].shape
-                args.nic = x_shape[1] if len(x_shape) in [4, 5] else 1
+                if len(x_shape) in [4, 5]:
+                    args.nic = x_shape[1]
+                else:
+                    args.nic = int(np.prod(x_shape[1:]))
+                if 'sensor_input' in f:
+                    args.nic += int(np.prod(f['sensor_input'].shape[1:]))
             elif 'sensor_input' in f:
                 x_shape = f['sensor_input'].shape
-                args.nic = x_shape[1] if len(x_shape) in [4, 5] else 1
+                if len(x_shape) in [4, 5]:
+                    args.nic = x_shape[1]
+                else:
+                    args.nic = int(np.prod(x_shape[1:]))
             else:
                 args.nic = 1
     except Exception as e:

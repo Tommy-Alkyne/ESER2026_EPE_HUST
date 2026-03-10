@@ -36,8 +36,17 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
         d, h, w = target_shape
         return np.tile(vec, (1, 1, d, h, w))
 
+    def _nonbatch_feature_dim(arr):
+        return int(np.prod(arr.shape[1:]))
+
     with h5py.File(data_dir, 'r') as f:
         y_data = f['output'][()]
+        if y_data.ndim == 4:
+            target_shape = (1, y_data.shape[-2], y_data.shape[-1])
+        elif y_data.ndim == 5:
+            target_shape = tuple(y_data.shape[-3:])
+        else:
+            raise ValueError("Unsupported output ndim {}".format(y_data.ndim))
 
         if input_key is not None and input_key in f:
             x_data = f[input_key][()]
@@ -49,6 +58,17 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
                 parts.append(_vector_to_5d(f['input'][()], (d_s, h_s, w_s)))
             if 'sensor_input' in f:
                 parts.append(_vector_to_5d(f['sensor_input'][()], (d_s, h_s, w_s)))
+            x_data = np.concatenate(parts, axis=1)
+        elif combine_inputs and ('input' in f or 'sensor_input' in f):
+            parts = []
+            if 'input' in f:
+                input_arr = f['input'][()]
+                if input_arr.ndim in (2, 3) and _nonbatch_feature_dim(input_arr) > 1:
+                    parts.append(_vector_to_5d(input_arr, target_shape))
+                else:
+                    parts.append(_reshape_to_5d(input_arr))
+            if 'sensor_input' in f:
+                parts.append(_vector_to_5d(f['sensor_input'][()], target_shape))
             x_data = np.concatenate(parts, axis=1)
         elif 'input' in f and (not prefer_sensor_input or 'sensor_input' not in f):
             x_data = f['input'][()]
