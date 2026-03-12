@@ -110,19 +110,12 @@ if getattr(args, 'ndim', 2) == 3:
                 args.noc = y_shape[1]
                 args.image_size = [1] + list(y_shape[-2:])
 
-            if 'spatial_input' in f:
-                spatial_shape = f['spatial_input'].shape
-                args.nic = spatial_shape[1]
-                if 'input' in f:
-                    args.nic += f['input'].shape[1]
-                if 'sensor_input' in f:
-                    args.nic += f['sensor_input'].shape[1]
-            elif 'input' in f:
-                x_shape = f['input'].shape
-                args.nic = x_shape[1] if len(x_shape) in [4, 5] else 1
-            elif 'sensor_input' in f:
+            if 'sensor_input' in f:
                 x_shape = f['sensor_input'].shape
-                args.nic = x_shape[1] if len(x_shape) in [4, 5] else 1
+            else:
+                x_shape = f['input'].shape
+            if len(x_shape) in [4, 5]:
+                args.nic = x_shape[1]
             else:
                 args.nic = 1
     except Exception as e:
@@ -160,74 +153,13 @@ logger['r2_train'] = []
 logger['r2_test'] = []
 logger['time'] = []
 
-def build_t_mask(output):
-    h, w = output.shape[-2:]
-    mask_2d = torch.zeros((h, w), device=output.device, dtype=output.dtype)
-    y1 = min(136, h)
-    x1 = min(35, w)
-    if y1 > 0 and x1 > 0:
-        mask_2d[0:y1, 0:x1] = 1.0
-    y0, y1b = min(51, h), min(87, h)
-    x0, x1b = min(35, w), min(137, w)
-    if y1b > y0 and x1b > x0:
-        mask_2d[y0:y1b, x0:x1b] = 1.0
-    if output.dim() == 4:
-        return mask_2d.unsqueeze(0).unsqueeze(0)
-    if output.dim() == 5:
-        d = output.shape[-3]
-        return mask_2d.unsqueeze(0).unsqueeze(0).unsqueeze(2).repeat(1, 1, d, 1, 1)
-    raise ValueError('Unsupported output dim {}'.format(output.dim()))
-
-
-def compute_gradient_loss(output, target, mask=None):
-    if output.dim() == 4:
-        grad_output_y = output[:, :, :, 1:] - output[:, :, :, :-1]
-        grad_output_x = output[:, :, 1:, :] - output[:, :, :-1, :]
-        grad_target_y = target[:, :, :, 1:] - target[:, :, :, :-1]
-        grad_target_x = target[:, :, 1:, :] - target[:, :, :-1, :]
-        if mask is not None:
-            mask_y = mask[:, :, :, 1:] * mask[:, :, :, :-1]
-            mask_x = mask[:, :, 1:, :] * mask[:, :, :-1, :]
-            grad_output_y = grad_output_y * mask_y
-            grad_output_x = grad_output_x * mask_x
-            grad_target_y = grad_target_y * mask_y
-            grad_target_x = grad_target_x * mask_x
-        loss_y = F.l1_loss(grad_output_y, grad_target_y, reduction='sum')
-        loss_x = F.l1_loss(grad_output_x, grad_target_x, reduction='sum')
-        return loss_y + loss_x
-    if output.dim() == 5:
-        grad_output_z = output[:, :, 1:, :, :] - output[:, :, :-1, :, :]
-        grad_output_y = output[:, :, :, 1:, :] - output[:, :, :, :-1, :]
-        grad_output_x = output[:, :, :, :, 1:] - output[:, :, :, :, :-1]
-        grad_target_z = target[:, :, 1:, :, :] - target[:, :, :-1, :, :]
-        grad_target_y = target[:, :, :, 1:, :] - target[:, :, :, :-1, :]
-        grad_target_x = target[:, :, :, :, 1:] - target[:, :, :, :, :-1]
-        if mask is not None:
-            mask_z = mask[:, :, 1:, :, :] * mask[:, :, :-1, :, :]
-            mask_y = mask[:, :, :, 1:, :] * mask[:, :, :, :-1, :]
-            mask_x = mask[:, :, :, :, 1:] * mask[:, :, :, :, :-1]
-            grad_output_z = grad_output_z * mask_z
-            grad_output_y = grad_output_y * mask_y
-            grad_output_x = grad_output_x * mask_x
-            grad_target_z = grad_target_z * mask_z
-            grad_target_y = grad_target_y * mask_y
-            grad_target_x = grad_target_x * mask_x
-        loss_z = F.l1_loss(grad_output_z, grad_target_z, reduction='sum')
-        loss_y = F.l1_loss(grad_output_y, grad_target_y, reduction='sum')
-        loss_x = F.l1_loss(grad_output_x, grad_target_x, reduction='sum')
-        return loss_z + loss_y + loss_x
-    raise ValueError('Unsupported output dim {}'.format(output.dim()))
-
 def test(epoch):#epoch is a number
     model.eval()
     mse = 0.
     for batch_idx, (input, target) in enumerate(test_loader):
         input, target = input.to(device), target.to(device)
         output = model(input)
-        t_mask = build_t_mask(output)
-        output_masked = output * t_mask
-        target_masked = target * t_mask
-        mse += F.mse_loss(output_masked, target_masked, reduction='sum').item()
+        mse += F.mse_loss(output, target, reduction='sum').item()
 
         # plot predictions
         if epoch % args.plot_freq == 0 and batch_idx == 0:
@@ -256,15 +188,10 @@ def train(epoch):
         input, target = input.to(device), target.to(device)
         model.zero_grad()
         output = model(input)
-        t_mask = build_t_mask(output)
-        loss_grad = compute_gradient_loss(output, target, mask=t_mask)
-        output_masked = output * t_mask
-        target_masked = target * t_mask
-        loss_l1 = F.l1_loss(output_masked, target_masked, reduction='sum')
-        loss = (args.lambda_l1 * loss_l1) + (args.lambda_grad * loss_grad)
+        loss = F.l1_loss(output, target, reduction='sum')
         loss.backward()
         optimizer.step()
-        mse += F.mse_loss(output_masked, target_masked, reduction='sum').item()
+        mse += F.mse_loss(output, target, reduction='sum').item()
 
     rmse = np.sqrt(mse / n_out_pixels_train)
     scheduler.step(rmse)
