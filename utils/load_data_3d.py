@@ -40,6 +40,7 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
         return int(np.prod(arr.shape[1:]))
 
     with h5py.File(data_dir, 'r') as f:
+        raw_shapes = {k: tuple(f[k].shape) for k in f.keys()}
         y_data = f['output'][()]
         if y_data.ndim == 4:
             target_shape = (1, y_data.shape[-2], y_data.shape[-1])
@@ -77,8 +78,8 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
         else:
             raise KeyError('No valid input dataset found in HDF5 file')
 
-    print("input data shape: {}".format(x_data.shape))
-    print("output data shape: {}".format(y_data.shape))
+    model_input_shape_before_align = tuple(x_data.shape)
+    model_output_shape = tuple(y_data.shape)
 
     # reshape input to 5D (N, C, D, H, W)
     if x_data.ndim == 2:
@@ -114,6 +115,11 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
                 mode='trilinear',
                 align_corners=False
             )
+
+    print("Loaded HDF5 file: {}".format(data_dir))
+    print("raw hdf5 shapes: {}".format(raw_shapes))
+    print("model input shape: {}".format(model_input_shape_before_align))
+    print("model output shape: {}".format(model_output_shape))
 
     kwargs = {'num_workers': 4,
               'pin_memory': True} if torch.cuda.is_available() else {}
