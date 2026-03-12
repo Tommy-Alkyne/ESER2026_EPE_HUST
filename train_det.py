@@ -181,6 +181,10 @@ logger['loss_reg_train'] = []
 logger['loss_reg_test'] = []
 logger['loss_grad_train'] = []
 logger['loss_grad_test'] = []
+logger['rmse_train'] = []
+logger['rmse_test'] = []
+logger['r2_train'] = []
+logger['r2_test'] = []
 logger['time'] = []
 
 def build_t_mask(output):
@@ -312,6 +316,42 @@ def build_regression_mask(output):
     return t_mask
 
 
+def compute_regression_statistics(prediction, target, mask):
+    if mask is None:
+        pred_valid = prediction.reshape(-1)
+        target_valid = target.reshape(-1)
+    else:
+        pred_valid = prediction[mask]
+        target_valid = target[mask]
+
+    if pred_valid.numel() == 0:
+        zero = torch.tensor(0.0, device=prediction.device, dtype=prediction.dtype)
+        return {
+            'count': 0,
+            'sse': zero,
+            'sst': zero,
+            'rmse': zero,
+            'r2': zero,
+        }
+
+    residual = pred_valid - target_valid
+    sse = torch.sum(residual ** 2)
+    target_mean = torch.mean(target_valid)
+    sst = torch.sum((target_valid - target_mean) ** 2)
+    rmse = torch.sqrt(torch.mean(residual ** 2))
+    if sst.item() <= 0:
+        r2 = torch.tensor(0.0, device=prediction.device, dtype=prediction.dtype)
+    else:
+        r2 = 1.0 - sse / sst
+    return {
+        'count': int(pred_valid.numel()),
+        'sse': sse,
+        'sst': sst,
+        'rmse': rmse,
+        'r2': r2,
+    }
+
+
 def compute_gradient_loss(output, target, mask=None):
     def _safe_l1(a, b):
         if a.numel() == 0 or b.numel() == 0:
@@ -362,6 +402,9 @@ def test(epoch):#epoch is a number
     total_loss_cls = 0.
     total_loss_reg = 0.
     total_loss_grad = 0.
+    total_squared_error = 0.0
+    total_squared_total = 0.0
+    total_regression_count = 0
     correct_pixels = 0
     total_valid_pixels = 0
     for batch_idx, (input, target) in enumerate(test_loader):
@@ -391,6 +434,11 @@ def test(epoch):#epoch is a number
         total_loss_reg += loss_reg.item()
         total_loss_grad += loss_grad.item()
 
+        reg_stats = compute_regression_statistics(pred_continuous, target_continuous, t_mask_reg_bool)
+        total_squared_error += reg_stats['sse'].item()
+        total_squared_total += reg_stats['sst'].item()
+        total_regression_count += reg_stats['count']
+
         total_valid_pixels += t_mask_reg_bool.sum().item()
 
         # plot predictions
@@ -413,8 +461,10 @@ def test(epoch):#epoch is a number
     avg_loss_cls = total_loss_cls / len(test_loader)
     avg_loss_reg = total_loss_reg / len(test_loader)
     avg_loss_grad = total_loss_grad / len(test_loader)
-    print("epoch: {}, test loss: {:.4f} (l1: {:.4f}, grad: {:.4f})".format(
-        epoch, avg_loss, avg_loss_reg, avg_loss_grad))
+    rmse = np.sqrt(total_squared_error / max(total_regression_count, 1))
+    r2 = 1.0 - total_squared_error / total_squared_total if total_squared_total > 0 else 0.0
+    print("epoch: {}, test loss: {:.4f} (l1: {:.4f}, grad: {:.4f}), r2: {:.6f}, rmse: {:.6f}".format(
+        epoch, avg_loss, avg_loss_reg, avg_loss_grad, r2, rmse))
 
     if epoch % args.log_freq == 0:
         logger['loss_test'].append(avg_loss)
@@ -422,6 +472,8 @@ def test(epoch):#epoch is a number
         logger['loss_cls_test'].append(avg_loss_cls)
         logger['loss_reg_test'].append(avg_loss_reg)
         logger['loss_grad_test'].append(avg_loss_grad)
+        logger['rmse_test'].append(rmse)
+        logger['r2_test'].append(r2)
 
 def train(epoch):
     model.train()
@@ -429,6 +481,9 @@ def train(epoch):
     total_loss_cls = 0.
     total_loss_reg = 0.
     total_loss_grad = 0.
+    total_squared_error = 0.0
+    total_squared_total = 0.0
+    total_regression_count = 0
     correct_pixels = 0
     total_valid_pixels = 0
     for _, (input, target) in enumerate(train_loader):
@@ -463,6 +518,10 @@ def train(epoch):
         total_loss_reg += loss_reg.item()
         total_loss_grad += loss_grad.item()
         with torch.no_grad():
+            reg_stats = compute_regression_statistics(pred_continuous, target_continuous, t_mask_reg_bool)
+            total_squared_error += reg_stats['sse'].item()
+            total_squared_total += reg_stats['sst'].item()
+            total_regression_count += reg_stats['count']
             total_valid_pixels += t_mask_reg_bool.sum().item()
 
     avg_loss = total_loss / len(train_loader)
@@ -471,8 +530,10 @@ def train(epoch):
     avg_loss_grad = total_loss_grad / len(train_loader)
     scheduler.step(avg_loss)
     acc = correct_pixels / total_valid_pixels if total_valid_pixels > 0 else 0.0
-    print("epoch: {}, training loss: {:.4f} (l1: {:.4f}, grad: {:.4f})".format(
-        epoch, avg_loss, avg_loss_reg, avg_loss_grad))
+    rmse = np.sqrt(total_squared_error / max(total_regression_count, 1))
+    r2 = 1.0 - total_squared_error / total_squared_total if total_squared_total > 0 else 0.0
+    print("epoch: {}, training loss: {:.4f} (l1: {:.4f}, grad: {:.4f}), r2: {:.6f}, rmse: {:.6f}".format(
+        epoch, avg_loss, avg_loss_reg, avg_loss_grad, r2, rmse))
 
     if epoch % args.log_freq == 0:
         logger['loss_train'].append(avg_loss)
@@ -480,6 +541,8 @@ def train(epoch):
         logger['loss_cls_train'].append(avg_loss_cls)
         logger['loss_reg_train'].append(avg_loss_reg)
         logger['loss_grad_train'].append(avg_loss_grad)
+        logger['rmse_train'].append(rmse)
+        logger['r2_train'].append(r2)
     # save model
     if epoch % args.ckpt_freq == 0:
         torch.save(model.state_dict(), args.ckpt_dir + "/model_epoch{}.pth".format(epoch))
