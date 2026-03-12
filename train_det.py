@@ -140,7 +140,8 @@ if getattr(args, 'ndim', 2) == 3:
 # initialize model
 num_classes = getattr(args, 'num_classes', 4)
 regression_channels = 1
-model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=num_classes + regression_channels,
+model_out_channels = regression_channels
+model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=model_out_channels,
                 blocks=args.blocks,
                 growth_rate=args.growth_rate, 
                 init_features=args.init_features,
@@ -166,6 +167,7 @@ criterion_ce = nn.CrossEntropyLoss(
     weight=class_weights, 
     ignore_index=-100)
 lambda_reg = getattr(args, 'lambda_reg', 5.0)
+lambda_l1 = getattr(args, 'lambda_l1', 1.0)
 lambda_grad = getattr(args, 'lambda_grad', 0.0)
 
 logger = {}
@@ -303,7 +305,19 @@ def apply_ignore_index_with_t_mask(target_discrete, output):
     return target_discrete, t_mask_bool
 
 
+def build_regression_mask(output):
+    t_mask = build_t_mask(output).bool()
+    if t_mask.shape[0] == 1 and output.shape[0] > 1:
+        t_mask = t_mask.expand(output.shape[0], *t_mask.shape[1:])
+    return t_mask
+
+
 def compute_gradient_loss(output, target, mask=None):
+    def _safe_l1(a, b):
+        if a.numel() == 0 or b.numel() == 0:
+            return torch.tensor(0.0, device=output.device, dtype=output.dtype)
+        return F.l1_loss(a, b, reduction='sum')
+
     if output.dim() == 4:
         grad_output_y = output[:, :, :, 1:] - output[:, :, :, :-1]
         grad_output_x = output[:, :, 1:, :] - output[:, :, :-1, :]
@@ -316,8 +330,8 @@ def compute_gradient_loss(output, target, mask=None):
             grad_output_x = grad_output_x * mask_x
             grad_target_y = grad_target_y * mask_y
             grad_target_x = grad_target_x * mask_x
-        loss_y = F.l1_loss(grad_output_y, grad_target_y, reduction='sum')
-        loss_x = F.l1_loss(grad_output_x, grad_target_x, reduction='sum')
+        loss_y = _safe_l1(grad_output_y, grad_target_y)
+        loss_x = _safe_l1(grad_output_x, grad_target_x)
         return loss_y + loss_x
     if output.dim() == 5:
         grad_output_z = output[:, :, 1:, :, :] - output[:, :, :-1, :, :]
@@ -336,9 +350,9 @@ def compute_gradient_loss(output, target, mask=None):
             grad_target_z = grad_target_z * mask_z
             grad_target_y = grad_target_y * mask_y
             grad_target_x = grad_target_x * mask_x
-        loss_z = F.l1_loss(grad_output_z, grad_target_z, reduction='sum')
-        loss_y = F.l1_loss(grad_output_y, grad_target_y, reduction='sum')
-        loss_x = F.l1_loss(grad_output_x, grad_target_x, reduction='sum')
+        loss_z = _safe_l1(grad_output_z, grad_target_z)
+        loss_y = _safe_l1(grad_output_y, grad_target_y)
+        loss_x = _safe_l1(grad_output_x, grad_target_x)
         return loss_z + loss_y + loss_x
     raise ValueError('Unsupported output dim {}'.format(output.dim()))
 
@@ -355,66 +369,29 @@ def test(epoch):#epoch is a number
         input_padded, h_slice, w_slice = maybe_pad_model_input(input)
         output_padded = model(input_padded)
         output = crop_model_output(output_padded, h_slice, w_slice)
-
-        out_class = output[:, :num_classes, ...]
-        out_reg = output[:, num_classes:num_classes + 1, ...]
         target_continuous = select_target_channel(target)
 
-        target_discrete = continuous_to_discrete(target_continuous)
-        bin_centers = compute_bin_centers(target_continuous)
-        target_center = labels_to_centers(target_discrete, bin_centers)
-        target_residual = target_continuous - target_center
-        target_discrete_ce = target_discrete.clone()
-        target_discrete_ce, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete_ce, out_class)
-
-        # Soft-argmax center for smoother gradient supervision field
-        probs = F.softmax(out_class, dim=1)
-        B_size, C_size = bin_centers.shape
-        view_shape = [B_size, C_size] + [1] * (out_class.dim() - 2)
-        bin_centers_expanded = bin_centers.view(*view_shape)
-        pred_center_soft = torch.sum(probs * bin_centers_expanded, dim=1, keepdim=True)
-
-        loss_cls = criterion_ce(out_class, target_discrete_ce)
-        t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
-        pred_continuous_for_loss = pred_center_soft + out_reg
+        pred_continuous = output[:, :1, ...]
+        t_mask_reg_bool = build_regression_mask(pred_continuous)
+        loss_cls = torch.tensor(0.0, device=output.device)
         if t_mask_reg_bool.any():
-            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_residual[t_mask_reg_bool])
+            loss_reg = F.l1_loss(pred_continuous[t_mask_reg_bool], target_continuous[t_mask_reg_bool])
             loss_grad = compute_gradient_loss(
-                pred_continuous_for_loss,
+                pred_continuous,
                 target_continuous,
                 mask=t_mask_reg_bool.float()
             ) / t_mask_reg_bool.sum().float().clamp(min=1.0)
         else:
             loss_reg = torch.tensor(0.0, device=output.device)
             loss_grad = torch.tensor(0.0, device=output.device)
-        loss = loss_cls + lambda_reg * loss_reg + lambda_grad * loss_grad
+        loss = lambda_l1 * loss_reg + lambda_grad * loss_grad
 
         total_loss += loss.item()
         total_loss_cls += loss_cls.item()
         total_loss_reg += loss_reg.item()
         total_loss_grad += loss_grad.item()
 
-        # ================== Soft-Argmax smooth assembly ==================
-        # 1) Keep argmax for classification accuracy metric
-        preds = torch.argmax(out_class, dim=1)
-
-        # 2) Convert logits to probabilities
-        probs = F.softmax(out_class, dim=1)
-
-        # 3) Expand bin centers to match feature-map rank
-        B_size, C_size = bin_centers.shape
-        view_shape = [B_size, C_size] + [1] * (out_class.dim() - 2)
-        bin_centers_expanded = bin_centers.view(*view_shape)
-
-        # 4) Probability-weighted center (smooth baseline)
-        pred_center_soft = torch.sum(probs * bin_centers_expanded, dim=1, keepdim=True)
-
-        # 5) Add residual branch for final continuous prediction
-        pred_continuous = pred_center_soft + out_reg
-        # ===============================================================
-        valid_mask = (target_discrete_ce != -100)
-        correct_pixels += (preds[valid_mask] == target_discrete_ce[valid_mask]).sum().item()
-        total_valid_pixels += valid_mask.sum().item()
+        total_valid_pixels += t_mask_reg_bool.sum().item()
 
         # plot predictions
         if epoch % args.plot_freq == 0 and batch_idx == 0:
@@ -436,8 +413,8 @@ def test(epoch):#epoch is a number
     avg_loss_cls = total_loss_cls / len(test_loader)
     avg_loss_reg = total_loss_reg / len(test_loader)
     avg_loss_grad = total_loss_grad / len(test_loader)
-    print("epoch: {}, test loss: {:.4f} (cls: {:.4f}, reg: {:.4f}, grad: {:.4f}), test accuracy: {:.2f}%".format(
-        epoch, avg_loss, avg_loss_cls, avg_loss_reg, avg_loss_grad, acc * 100))
+    print("epoch: {}, test loss: {:.4f} (l1: {:.4f}, grad: {:.4f})".format(
+        epoch, avg_loss, avg_loss_reg, avg_loss_grad))
 
     if epoch % args.log_freq == 0:
         logger['loss_test'].append(avg_loss)
@@ -460,32 +437,22 @@ def train(epoch):
         input_padded, h_slice, w_slice = maybe_pad_model_input(input)
         output_padded = model(input_padded)
         output = crop_model_output(output_padded, h_slice, w_slice)
-
-        out_class = output[:, :num_classes, ...]
-        out_reg = output[:, num_classes:num_classes + 1, ...]
         target_continuous = select_target_channel(target)
 
-        target_discrete = continuous_to_discrete(target_continuous)
-        bin_centers = compute_bin_centers(target_continuous)
-        target_center = labels_to_centers(target_discrete, bin_centers)
-        target_residual = target_continuous - target_center
-        target_discrete_ce = target_discrete.clone()
-        target_discrete_ce, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete_ce, out_class)
-
-        loss_cls = criterion_ce(out_class, target_discrete_ce)
-        t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
-        pred_continuous_for_loss = target_center + out_reg
+        pred_continuous = output[:, :1, ...]
+        t_mask_reg_bool = build_regression_mask(pred_continuous)
+        loss_cls = torch.tensor(0.0, device=output.device)
         if t_mask_reg_bool.any():
-            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_residual[t_mask_reg_bool])
+            loss_reg = F.l1_loss(pred_continuous[t_mask_reg_bool], target_continuous[t_mask_reg_bool])
             loss_grad = compute_gradient_loss(
-                pred_continuous_for_loss,
+                pred_continuous,
                 target_continuous,
                 mask=t_mask_reg_bool.float()
             ) / t_mask_reg_bool.sum().float().clamp(min=1.0)
         else:
             loss_reg = torch.tensor(0.0, device=output.device)
             loss_grad = torch.tensor(0.0, device=output.device)
-        loss = loss_cls + lambda_reg * loss_reg + lambda_grad * loss_grad
+        loss = lambda_l1 * loss_reg + lambda_grad * loss_grad
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -496,28 +463,7 @@ def train(epoch):
         total_loss_reg += loss_reg.item()
         total_loss_grad += loss_grad.item()
         with torch.no_grad():
-            # ================== Soft-Argmax smooth assembly ==================
-            # 1) Keep argmax for classification accuracy metric
-            preds = torch.argmax(out_class, dim=1)
-
-            # 2) Convert logits to probabilities
-            probs = F.softmax(out_class, dim=1)
-
-            # 3) Expand bin centers to match feature-map rank
-            B_size, C_size = bin_centers.shape
-            view_shape = [B_size, C_size] + [1] * (out_class.dim() - 2)
-            bin_centers_expanded = bin_centers.view(*view_shape)
-
-            # 4) Probability-weighted center (smooth baseline)
-            pred_center_soft = torch.sum(probs * bin_centers_expanded, dim=1, keepdim=True)
-
-            # 5) Add residual branch for final continuous prediction
-            pred_continuous = pred_center_soft + out_reg
-            # ===============================================================
-
-            valid_mask = (target_discrete_ce != -100)
-            correct_pixels += (preds[valid_mask] == target_discrete_ce[valid_mask]).sum().item()
-            total_valid_pixels += valid_mask.sum().item()
+            total_valid_pixels += t_mask_reg_bool.sum().item()
 
     avg_loss = total_loss / len(train_loader)
     avg_loss_cls = total_loss_cls / len(train_loader)
@@ -525,8 +471,8 @@ def train(epoch):
     avg_loss_grad = total_loss_grad / len(train_loader)
     scheduler.step(avg_loss)
     acc = correct_pixels / total_valid_pixels if total_valid_pixels > 0 else 0.0
-    print("epoch: {}, training loss: {:.4f} (cls: {:.4f}, reg: {:.4f}, grad: {:.4f}), accuracy: {:.2f}%".format(
-        epoch, avg_loss, avg_loss_cls, avg_loss_reg, avg_loss_grad, acc * 100))
+    print("epoch: {}, training loss: {:.4f} (l1: {:.4f}, grad: {:.4f})".format(
+        epoch, avg_loss, avg_loss_reg, avg_loss_grad))
 
     if epoch % args.log_freq == 0:
         logger['loss_train'].append(avg_loss)
