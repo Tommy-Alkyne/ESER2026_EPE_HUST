@@ -33,7 +33,7 @@ class Parser(argparse.ArgumentParser):
         
         # network
         self.add_argument('--blocks', type=list, default=[3, 6, 3], help='list of number of layers in each dense block')
-        self.add_argument('--growth-rate', type=int, default=16, help='number of output feature maps of each conv layer within each dense block')
+        self.add_argument('--growth-rate', type=int, default=32, help='number of output feature maps of each conv layer within each dense block')
         self.add_argument('--init-features', type=int, default=48, help='number of initial features after the first conv layer')        
         self.add_argument('--drop-rate', type=float, default=0., help='dropout rate')
         self.add_argument('--bn-size', type=int, default=8, help='bottleneck size: bn_size * growth_rate')
@@ -58,7 +58,7 @@ class Parser(argparse.ArgumentParser):
         self.add_argument('--lr', type=float, default=3e-3, help='learnign rate')
         # self.add_argument('--lr-scheduler', type=str, default='plateau', help="scheduler, plateau or step")
         self.add_argument('--weight-decay', type=float, default=5e-4, help="weight decay")
-        self.add_argument('--batch-size', type=int, default=16, help='input batch size for training (default: 16)')
+        self.add_argument('--batch-size', type=int, default=64, help='input batch size for training (default: 16)')
         self.add_argument('--test-batch-size', type=int, default=100, help='input batch size for testing (default: 100)')
         self.add_argument('--seed', type=int, default=1, help='manual seed used in Tensor')
         self.add_argument('--lambda-l1', type=float, default=1.0, help='weight for base L1 loss')
