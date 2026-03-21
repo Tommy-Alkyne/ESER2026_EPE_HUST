@@ -1,7 +1,7 @@
 # README 中文更新
 
 ## Prediction 预测
-用来指定模型.pth文件和数据.hdf5文件来预测的脚本. 使用的是`surrogate_predict.py`
+用来指定模型.pth文件和数据.hdf5文件来预测的脚本. 使用的是`surrogate_predict.py`.
 ### 参数
 --ckpt-file 使用的模型pth文件的路径 例: `--ckpt-file './experiments/2dtest_1024/kle4225/ntrain1024_blocks[3, 6, 3]_growth16_nif48_drop0.0_batch16_lr0.003_wd0.0005_epochs150/checkpoints/model_epoch100.pth'` 注意, 如果路径中有中括号`[`等特殊字符需要用单引号`'`把文件路径括起来. 会有中括号是因为默认的保存命名方式如此
 
