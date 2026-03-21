@@ -8,7 +8,6 @@ import torch.optim as optim
 import torch.nn.functional as F
 import h5py
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import Dataset, DataLoader
 import sys
 import os
 
@@ -133,8 +132,8 @@ model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=getattr(args, 
                 output_size=tuple(getattr(args, 'image_size', [1, 65, 65])) if getattr(args, 'ndim', 2) == 3 else None).to(device)
 print(model)
 
-train_loader, train_stats = load_data(train_data_dir, args.batch_size)
-test_loader, test_stats = load_data(test_data_dir, args.test_batch_size)
+train_loader, _ = load_data(train_data_dir, args.batch_size)
+test_loader, _ = load_data(test_data_dir, args.test_batch_size)
 print('Loaded data!')
 
 optimizer = optim.Adam(model.parameters(), lr=args.lr,
@@ -144,9 +143,6 @@ scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
                     threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
-n_out_pixels_train = len(train_loader.dataset) * train_loader.dataset[0][1].numel()
-n_out_pixels_test = len(test_loader.dataset) * test_loader.dataset[0][1].numel()
-
 logger = {}
 logger['rmse_train'] = []
 logger['rmse_test'] = []
@@ -154,28 +150,58 @@ logger['r2_train'] = []
 logger['r2_test'] = []
 logger['time'] = []
 
+
+def build_t_mask(output):
+    h, w = output.shape[-2:]
+    mask_2d = torch.zeros((h, w), device=output.device, dtype=output.dtype)
+    y1 = min(136, h)
+    x1 = min(35, w)
+    if y1 > 0 and x1 > 0:
+        mask_2d[0:y1, 0:x1] = 1.0
+    y0, y1b = min(51, h), min(87, h)
+    x0, x1b = min(35, w), min(137, w)
+    if y1b > y0 and x1b > x0:
+        mask_2d[y0:y1b, x0:x1b] = 1.0
+    if output.dim() == 4:
+        return mask_2d.unsqueeze(0).unsqueeze(0)
+    if output.dim() == 5:
+        d = output.shape[-3]
+        return mask_2d.unsqueeze(0).unsqueeze(0).unsqueeze(2).repeat(1, 1, d, 1, 1)
+    raise ValueError('Unsupported output dim {}'.format(output.dim()))
+
 def test(epoch):#epoch is a number
     model.eval()
     mse = 0.
+    n_out_pixels_test = 0
+    masked_sum_y = 0.
+    masked_sum_y2 = 0.
     for batch_idx, (input, target) in enumerate(test_loader):
         input, target = input.to(device), target.to(device)
         output = model(input)
-        mse += F.mse_loss(output, target, reduction='sum').item()
+        t_mask = build_t_mask(output)
+        t_mask = t_mask.expand(output.shape[0], output.shape[1], *output.shape[2:])
+        masked_output = output * t_mask
+        masked_target = target * t_mask
+        mse += F.mse_loss(masked_output, masked_target, reduction='sum').item()
+        n_out_pixels_test += t_mask.sum().item()
+        masked_sum_y += masked_target.sum().item()
+        masked_sum_y2 += (masked_target ** 2).sum().item()
 
         # plot predictions
         if epoch % args.plot_freq == 0 and batch_idx == 0:
             n_samples = 6 if epoch == args.epochs else 2
             idx = torch.randperm(input.size(0))[:n_samples]
-            samples_output = output.data.cpu()[idx].numpy()
-            samples_target = target.data.cpu()[idx].numpy()
+            samples_output = masked_output.data.cpu()[idx].numpy()
+            samples_target = masked_target.data.cpu()[idx].numpy()
 
             for i in range(n_samples):
                 print('epoch {}: plotting prediction {}'.format(epoch, i))
                 plot_prediction_det(args.pred_dir, samples_target[i], 
                     samples_output[i], epoch, i, plot_fn=args.plot_fn)
 
-    rmse_test = np.sqrt(mse / n_out_pixels_test)
-    r2_score = 1 - mse / test_stats['y_var']
+    rmse_test = np.sqrt(mse / max(n_out_pixels_test, 1.0))
+    ss_tot = masked_sum_y2 - (masked_sum_y ** 2) / max(n_out_pixels_test, 1.0)
+    r2_score = 1 - mse / max(ss_tot, 1e-12)
     print("epoch: {}, test r2-score:  {:.6f}".format(epoch, r2_score))
 
     if epoch % args.log_freq == 0:
@@ -185,18 +211,29 @@ def test(epoch):#epoch is a number
 def train(epoch):
     model.train()
     mse = 0.
+    n_out_pixels_train = 0
+    masked_sum_y = 0.
+    masked_sum_y2 = 0.
     for _, (input, target) in enumerate(train_loader):
         input, target = input.to(device), target.to(device)
         model.zero_grad()
         output = model(input)
-        loss = F.l1_loss(output, target, reduction='sum')
+        t_mask = build_t_mask(output)
+        t_mask = t_mask.expand(output.shape[0], output.shape[1], *output.shape[2:])
+        masked_output = output * t_mask
+        masked_target = target * t_mask
+        loss = F.l1_loss(masked_output, masked_target, reduction='sum')
         loss.backward()
         optimizer.step()
-        mse += F.mse_loss(output, target, reduction='sum').item()
+        mse += F.mse_loss(masked_output, masked_target, reduction='sum').item()
+        n_out_pixels_train += t_mask.sum().item()
+        masked_sum_y += masked_target.sum().item()
+        masked_sum_y2 += (masked_target ** 2).sum().item()
 
-    rmse = np.sqrt(mse / n_out_pixels_train)
+    rmse = np.sqrt(mse / max(n_out_pixels_train, 1.0))
     scheduler.step(rmse)
-    r2_score = 1 - mse / train_stats['y_var']
+    ss_tot = masked_sum_y2 - (masked_sum_y ** 2) / max(n_out_pixels_train, 1.0)
+    r2_score = 1 - mse / max(ss_tot, 1e-12)
     print("epoch: {}, training r2-score: {:.6f}".format(epoch, r2_score))
     if epoch % args.log_freq == 0:
         logger['r2_train'].append(r2_score)
