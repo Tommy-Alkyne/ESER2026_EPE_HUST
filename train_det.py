@@ -140,7 +140,8 @@ print('Loaded data!')
 optimizer = optim.Adam(model.parameters(), lr=args.lr,
                        weight_decay=args.weight_decay)
 scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
-                    verbose=True, threshold=0.0001, threshold_mode='rel',
+                    #verbose=True, 
+                    threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
 n_out_pixels_train = len(train_loader.dataset) * train_loader.dataset[0][1].numel()

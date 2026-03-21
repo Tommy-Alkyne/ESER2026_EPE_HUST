@@ -20,7 +20,6 @@ def plot_prediction_det(save_dir, target, prediction, epoch, index,
     target, prediction = to_numpy(target), to_numpy(prediction)
 
     # If data has shape (C, D, H, W), select the middle depth slice.
-    # Odd D: middle; Even D: upper of the two middle slices (index D//2).
     def _select_middle_depth(x):
         if x is None:
             return x
@@ -75,14 +74,21 @@ def plot_prediction_det(save_dir, target, prediction, epoch, index,
                                     interpolation='bilinear')
 
             if plot_fn == 'contourf':
-                for coll in cax.collections:
-                    coll.set_edgecolor("face")
-                    coll.set_linewidth(0.000000000001)
+                # 修复 Matplotlib 3.8+ 兼容性问题
+                if hasattr(cax, 'collections'):
+                    for coll in cax.collections:
+                        coll.set_edgecolor("face")
+                        coll.set_linewidth(0.000000000001)
+                else:
+                    cax.set_edgecolor("face")
+                    cax.set_linewidth(0.000000000001)
+
             cbar = plt.colorbar(cax, ax=ax, fraction=0.046, pad=0.04,
                                 format=ticker.ScalarFormatter(useMathText=True))
             cbar.formatter.set_powerlimits((-2, 2))
             cbar.ax.yaxis.set_offset_position('left')
             cbar.update_ticks()
+            
     plt.tight_layout(pad=0.05, w_pad=0.05, h_pad=0.05)
     plt.savefig(save_dir + '/pred_epoch{}_{}.pdf'.format(epoch, index),
                 dpi=300, bbox_inches='tight')
@@ -90,7 +96,6 @@ def plot_prediction_det(save_dir, target, prediction, epoch, index,
 
 
 def save_stats(save_dir, logger, x_axis):
-
     rmse_train = logger['rmse_train']
     rmse_test = logger['rmse_test']
     r2_train = logger['r2_train']
@@ -143,29 +148,14 @@ def save_stats(save_dir, logger, x_axis):
     np.savetxt(save_dir + "/rmse_test.txt", rmse_test)
 
 
-
 def plot_prediction_bayes(save_dir, target, pred_mean, pred_var, epoch, index, 
         plot_fn='contourf'):
-    """Plot predictions at *one* test input
-
-    Args:
-        save_dir: directory to save predictions
-        target (np.ndarray or torch.Tensor): (3, 65, 65)
-        pred_mean (np.ndarray or torch.Tensor): (3, 65, 65)
-        pred_var (np.ndarray or torch.Tensor): (3, 65, 65)
-        epoch (int): which epoch
-        index (int): i-th prediction
-        plot_fn (str): choices=['contourf', 'imshow']
-    """
     target, pred_mean, pred_var = to_numpy(target), to_numpy(pred_mean), to_numpy(pred_var)
 
     def _select_middle_depth(x):
-        if x is None:
-            return x
+        if x is None: return x
         if x.ndim == 4:
             C, D, H, W = x.shape
-            if D == 1:
-                return x[:, 0, :, :]
             idx = D // 2
             return x[:, idx, :, :]
         return x
@@ -176,7 +166,6 @@ def plot_prediction_bayes(save_dir, target, pred_mean, pred_var, epoch, index,
 
     pred_error = target - pred_mean    
     two_sigma = np.sqrt(pred_var) * 2
-    # target: C x H x W
     sfmt = ticker.ScalarFormatter(useMathText=True)
     sfmt.set_powerlimits((-2, 2))
     cmap = 'jet'
@@ -190,96 +179,66 @@ def plot_prediction_bayes(save_dir, target, pred_mean, pred_var, epoch, index,
 
     for i, subplot_i in enumerate(subplots_position):
         if i < 3:
-            # share one colorbar
-            grid = ImageGrid(fig, subplot_i,          # as in plt.subplot(111)
-                             nrows_ncols=(2, 1),
-                             axes_pad=axes_pad,
-                             share_all=False,
-                             cbar_location="right",
-                             cbar_mode="single",
-                             cbar_size="3%",
-                             cbar_pad=cbar_pad,
-                             )
+            grid = ImageGrid(fig, subplot_i, nrows_ncols=(2, 1), axes_pad=axes_pad,
+                             share_all=False, cbar_location="right", cbar_mode="single",
+                             cbar_size="3%", cbar_pad=cbar_pad)
             data = (target[i], pred_mean[i])
             channel = np.concatenate(data)
             vmin, vmax = np.amin(channel), np.amax(channel)
-            # Add data to image grid
             for j, ax in enumerate(grid):
                 if plot_fn == 'contourf':
                     im = ax.contourf(data[j], 50, vmin=vmin, vmax=vmax, cmap=cmap)
-                    for c in im.collections:
-                        c.set_edgecolor("face")
-                        c.set_linewidth(0.000000000001)
+                    # 修复 3.8+ 兼容性
+                    if hasattr(im, 'collections'):
+                        for c in im.collections:
+                            c.set_edgecolor("face")
+                            c.set_linewidth(0.000000000001)
+                    else:
+                        im.set_edgecolor("face")
+                        im.set_linewidth(0.000000000001)
                 elif plot_fn == 'imshow':
-                    im = ax.imshow(data[j], vmin=vmin, vmax=vmax,
-                        interpolation=interpolation, cmap=cmap)
+                    im = ax.imshow(data[j], vmin=vmin, vmax=vmax, interpolation=interpolation, cmap=cmap)
                 ax.set_axis_off()
-            # ticks=np.linspace(vmin, vmax, 10)
-            #set_ticks, set_ticklabels
             cbar = grid.cbar_axes[0].colorbar(im, format=sfmt)
-            # cbar.ax.set_yticks((vmin, vmax))
             cbar.ax.yaxis.set_offset_position('left')
             cbar.ax.tick_params(labelsize=label_size)
             cbar.ax.toggle_label(True)
-
         else:
-            grid = ImageGrid(fig, subplot_i,  # as in plt.subplot(111)
-                             nrows_ncols=(2, 1),
-                             axes_pad=axes_pad,
-                             share_all=False,
-                             cbar_location="right",
-                             cbar_mode="each",
-                             cbar_size="6%",
-                             cbar_pad=cbar_pad,
-                             )
+            grid = ImageGrid(fig, subplot_i, nrows_ncols=(2, 1), axes_pad=axes_pad,
+                             share_all=False, cbar_location="right", cbar_mode="each",
+                             cbar_size="6%", cbar_pad=cbar_pad)
             data = (pred_error[i-3], two_sigma[i-3])
-            # channel = np.concatenate(data)
-            # vmin, vmax = np.amin(channel), np.amax(channel)
-            # Add data to image grid
             for j, ax in enumerate(grid):
                 if plot_fn == 'contourf':
                     im = ax.contourf(data[j], 50, cmap=cmap)
-                    for c in im.collections:
-                        c.set_edgecolor("face")
-                        c.set_linewidth(0.000000000001)
+                    if hasattr(im, 'collections'):
+                        for c in im.collections:
+                            c.set_edgecolor("face")
+                            c.set_linewidth(0.000000000001)
+                    else:
+                        im.set_edgecolor("face")
+                        im.set_linewidth(0.000000000001)
                 elif plot_fn == 'imshow':
                     im = ax.imshow(data[j], interpolation=interpolation, cmap=cmap)
                 ax.set_axis_off()
                 cbar = grid.cbar_axes[j].colorbar(im, format=sfmt)
                 grid.cbar_axes[j].tick_params(labelsize=label_size)
                 grid.cbar_axes[j].toggle_label(True)
-                # cbar.formatter.set_powerlimits((0, 0))
                 cbar.ax.yaxis.set_offset_position('left')
-                # print(dir(cbar.ax.yaxis))
-                # cbar.update_ticks()
 
-    # plt.tight_layout(pad=0.5, w_pad=0.5, h_pad=0.5)
     fig.subplots_adjust(wspace=0.075, hspace=0.075)
-
     plt.savefig(save_dir + '/pred_at_x_epoch{}_{}.pdf'.format(epoch, index), 
                 dpi=300, bbox_inches='tight')
     plt.close(fig)
 
 
 def plot_MC(save_dir, monte_carlo, pred_mean, pred_var, mean, n_train):
-    """Plot Monte Carlo Output
-    
-    Args:
-        monte_carlo (np.ndarray or torch.Tensor): simulation output
-        pred_mean (np.ndarray or torch.Tensor): from surrogate
-        pred_var (np.ndarray or torch.Tensor): predictive var using surrogate
-        mean (bool): Used in printing. True for plotting mean, False for var
-    """
-    monte_carlo, pred_mean, pred_var = to_numpy(monte_carlo), \
-                                       to_numpy(pred_mean), to_numpy(pred_var)
+    monte_carlo, pred_mean, pred_var = to_numpy(monte_carlo), to_numpy(pred_mean), to_numpy(pred_var)
 
     def _select_middle_depth(x):
-        if x is None:
-            return x
+        if x is None: return x
         if x.ndim == 4:
             C, D, H, W = x.shape
-            if D == 1:
-                return x[:, 0, :, :]
             idx = D // 2
             return x[:, idx, :, :]
         return x
@@ -288,13 +247,11 @@ def plot_MC(save_dir, monte_carlo, pred_mean, pred_var, mean, n_train):
     pred_mean = _select_middle_depth(pred_mean)
     pred_var = _select_middle_depth(pred_var)
 
-    two_sigma = 2 * np.sqrt(pred_var)
-    # target: C x H x W
     sfmt = ticker.ScalarFormatter(useMathText=True)
     sfmt.set_powerlimits((0, 0))
     cmap = 'jet'
-    interpolation = 'bilinear'
     pred_error = monte_carlo - pred_mean
+    two_sigma = 2 * np.sqrt(pred_var)
     fig = plt.figure(1, (10, 10))
     axes_pad = 0.25
     cbar_pad = 0.1
@@ -304,70 +261,48 @@ def plot_MC(save_dir, monte_carlo, pred_mean, pred_var, mean, n_train):
 
     for i, subplot_i in enumerate(subplots_position):
         if i < 3:
-            # share one colorbar
-            grid = ImageGrid(fig, subplot_i,          # as in plt.subplot(111)
-                             nrows_ncols=(2, 1),
-                             axes_pad=axes_pad,
-                             share_all=False,
-                             cbar_location="right",
-                             cbar_mode="single",
-                             cbar_size="3%",
-                             cbar_pad=cbar_pad,
-                             )
+            grid = ImageGrid(fig, subplot_i, nrows_ncols=(2, 1), axes_pad=axes_pad,
+                             share_all=False, cbar_location="right", cbar_mode="single",
+                             cbar_size="3%", cbar_pad=cbar_pad)
             data = (monte_carlo[i], pred_mean[i])
             channel = np.concatenate(data)
             vmin, vmax = np.amin(channel), np.amax(channel)
-            # Add data to image grid
             for j, ax in enumerate(grid):
-                # im = ax.imshow(data[j], vmin=vmin, vmax=vmax,
-                #                interpolation=interpolation, cmap=cmap)
                 im = ax.contourf(data[j], 50, vmin=vmin, vmax=vmax, cmap=cmap)
-                for c in im.collections:
-                    c.set_edgecolor("face")
-                    c.set_linewidth(0.000000000001)
+                if hasattr(im, 'collections'):
+                    for c in im.collections:
+                        c.set_edgecolor("face")
+                        c.set_linewidth(0.000000000001)
+                else:
+                    im.set_edgecolor("face")
+                    im.set_linewidth(0.000000000001)
                 ax.set_axis_off()
-            # ticks=np.linspace(vmin, vmax, 10)
-            #set_ticks, set_ticklabels
             cbar = grid.cbar_axes[0].colorbar(im, format=sfmt)
-            # cbar.ax.set_yticks((vmin, vmax))
             cbar.ax.tick_params(labelsize=label_size)
             cbar.ax.yaxis.set_offset_position('left')
             cbar.ax.toggle_label(True)
-
         else:
-            grid = ImageGrid(fig, subplot_i,  # as in plt.subplot(111)
-                             nrows_ncols=(2, 1),
-                             axes_pad=axes_pad,
-                             share_all=False,
-                             cbar_location="right",
-                             cbar_mode="each",
-                             cbar_size="6%",
-                             cbar_pad=cbar_pad,
-                             )
+            grid = ImageGrid(fig, subplot_i, nrows_ncols=(2, 1), axes_pad=axes_pad,
+                             share_all=False, cbar_location="right", cbar_mode="each",
+                             cbar_size="6%", cbar_pad=cbar_pad)
             data = (pred_error[i-3], two_sigma[i-3])
-            # channel = np.concatenate(data)
-            # vmin, vmax = np.amin(channel), np.amax(channel)
-            # Add data to image grid
             for j, ax in enumerate(grid):
-                # im = ax.imshow(data[j], interpolation=interpolation, cmap=cmap)
                 im = ax.contourf(data[j], 50, cmap=cmap)
-                for c in im.collections:
-                    c.set_edgecolor("face")
-                    c.set_linewidth(0.000000000001)
+                if hasattr(im, 'collections'):
+                    for c in im.collections:
+                        c.set_edgecolor("face")
+                        c.set_linewidth(0.000000000001)
+                else:
+                    im.set_edgecolor("face")
+                    im.set_linewidth(0.000000000001)
                 ax.set_axis_off()
                 cbar = grid.cbar_axes[j].colorbar(im, format=sfmt)
                 grid.cbar_axes[j].tick_params(labelsize=label_size)
                 grid.cbar_axes[j].toggle_label(True)
-                # cbar.formatter.set_powerlimits((0, 0))
                 cbar.ax.yaxis.set_offset_position('left')
-                # print(dir(cbar.ax.yaxis))
-                # cbar.update_ticks()
 
-    # plt.tight_layout(pad=0.5, w_pad=0.5, h_pad=0.5)
     fig.subplots_adjust(wspace=0.075, hspace=0.075)
-
     plt.savefig(save_dir + '/pred_{}_vs_MC.pdf'.format('mean' if mean else 'var'),
                 dpi=300, bbox_inches='tight')
     plt.close(fig)
-    print("Done plotting Pred_{}_vs_MC, num of training: {}"
-          .format('mean' if mean else 'var', n_train))
+    print("Done plotting Pred_{}_vs_MC, num of training: {}".format('mean' if mean else 'var', n_train))
