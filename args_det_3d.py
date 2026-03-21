@@ -1,11 +1,28 @@
 import argparse
+import os
+import re
 import torch
 import json
 import random
+from datetime import datetime, timedelta, timezone
 from pprint import pprint
 from utils.misc import mkdirs
 
 # always uses cuda if avaliable
+
+
+def _beijing_timestamp():
+    tz_bjt = timezone(timedelta(hours=8))
+    return datetime.now(tz_bjt).strftime('%Y%m%d_%H%M%S')
+
+
+def _train_file_tag(train_file):
+    if train_file:
+        base_name = os.path.splitext(os.path.basename(train_file))[0]
+    else:
+        base_name = '10243d'
+    safe_name = re.sub(r'[^A-Za-z0-9._-]+', '-', base_name).strip('-')
+    return safe_name or 'train'
 
 class Parser(argparse.ArgumentParser):
     def __init__(self):
@@ -62,14 +79,17 @@ class Parser(argparse.ArgumentParser):
 
     def parse(self):
         args = self.parse_args()
+
+        # If test file is not provided, reuse train file by default.
+        if args.test_file is None:
+            args.test_file = args.train_file
+
+        timestamp_bjt = _beijing_timestamp()
+        train_tag = _train_file_tag(args.train_file)
         
-        args.run_dir = args.exp_dir + '/' + args.exp_name \
-            + '/kle{}/ntrain{}_blocks{}_growth{}_nif{}_drop{}_batch{}_lr{}_wd{}_epochs{}'.format(
-                args.kle, args.ntrain, args.blocks, args.growth_rate,
-                args.init_features, args.drop_rate, args.batch_size, 
-                args.lr, args.weight_decay, args.epochs
-            )
-        args.ckpt_dir = args.run_dir + '/checkpoints'
+        # New run directory layout: experiments/<exp-name>/<BJT timestamp>_<train-file-name>
+        args.run_dir = os.path.join(args.exp_dir, args.exp_name, '{}_{}'.format(timestamp_bjt, train_tag))
+        args.ckpt_dir = os.path.join(args.run_dir, 'checkpoints')
         mkdirs([args.run_dir, args.ckpt_dir])
 
         # validate image size
