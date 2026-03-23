@@ -103,6 +103,32 @@ if getattr(args, 'ndim', 2) == 3:
                 args.nic = 1
     except Exception as e:
         print('Warning: failed to infer 3D data shapes from {}: {}'.format(train_data_dir, e))
+else:
+    # 对于2D模式，也自动检测通道数
+    try:
+        with h5py.File(train_data_dir, 'r') as f:
+            # 检测输出通道数
+            y_shape = f['output'].shape
+            if len(y_shape) == 5 and y_shape[2] == 1:  # (N, C, 1, H, W) 压缩后变成 (N, C, H, W)
+                args.noc = y_shape[1]
+            elif len(y_shape) == 4:
+                args.noc = y_shape[1]
+            else:
+                args.noc = getattr(args, 'noc', 3)
+            
+            # 检测输入通道数
+            if 'sensor_input' in f:
+                x_shape = f['sensor_input'].shape
+            else:
+                x_shape = f['input'].shape
+            if len(x_shape) == 3:  # (N, H, W) 会在load_data转为 (N, 1, H, W)
+                args.nic = 1
+            elif len(x_shape) >= 4:
+                args.nic = x_shape[1]
+            else:
+                args.nic = 1
+    except Exception as e:
+        print('Warning: failed to infer 2D data shapes from {}: {}'.format(train_data_dir, e))
 
 model_kwargs = {
     'in_channels': getattr(args, 'nic', 1),
