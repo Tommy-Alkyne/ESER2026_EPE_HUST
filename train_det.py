@@ -1,17 +1,11 @@
-"""
-Train deterministic convolutional encoder-decoder networks
-"""
-
 import torch
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
 import h5py
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import sys
 import os
-from time import time
-import json
 
 # choose args module based on command-line flag --ndim 3 or --use-3d
 use_3d = False
@@ -31,6 +25,7 @@ else:
     from args_det import args, device
 from utils.misc import mkdirs
 
+# choose 2D/3D implementations depending on args.ndim (default 2)
 if getattr(args, 'ndim', 2) == 3:
     from models.dense_ed_3d import DenseED as DenseED
     from utils.load_data_3d import load_data
@@ -39,11 +34,24 @@ else:
     from models.dense_ed import DenseED
     from utils.load_data import load_data
     from utils.plot import plot_prediction_det, save_stats
+import json
+from time import time
 
 args.train_dir = args.run_dir + "/training"
 args.pred_dir = args.train_dir + "/predictions"
 mkdirs([args.train_dir, args.pred_dir])
 
+# load checkpoint if in post mode
+# if args.post:
+#     if args.ckpt_epoch is not None:
+#         checkpoint = args.ckpt_dir + '/model_epoch{}.pth'.format(args.ckpt_epoch)
+#     else:
+#         checkpoint = args.ckpt_dir + '/model_epoch{}.pth'.format(args.epochs)
+#     model.load_state_dict(torch.load(checkpoint))
+#     print('Loaded pre-trained model: {}'.format(checkpoint))
+
+# load data
+# allow overriding train/test files via command-line --train-file / --test-file
 train_file = None
 test_file = None
 if '--train-file' in sys.argv:
@@ -57,19 +65,22 @@ if '--test-file' in sys.argv:
     except Exception:
         test_file = None
 
-# --- MODIFIED: 强制将默认训练集指定为你现有的 p_v_256.hdf5 ---
 if train_file is not None:
+    # If user passed an absolute path, use it. If user passed a relative path
+    # that contains a directory component (e.g. 'dataset/10243d.hdf5'),
+    # assume they intended that relative path and use it as-is. Only join
+    # with args.data_dir when the user provided a bare filename.
     if os.path.isabs(train_file):
         train_data_dir = train_file
     elif os.path.dirname(train_file):
         train_data_dir = train_file
     else:
         train_data_dir = os.path.join(args.data_dir, train_file)
+elif getattr(args, 'ndim', 2) == 3:
+    train_data_dir = os.path.join(args.data_dir, '10243d.hdf5')
 else:
-    # 无论 2D 还是 3D，默认都去 dataset 文件夹下找 p_v_256.hdf5
-    train_data_dir = os.path.join(args.data_dir, 'p_v_256.hdf5')
+    train_data_dir = args.data_dir + '/kle{}_lhs{}.hdf5'.format(args.kle, args.ntrain)
 
-# --- MODIFIED: 强制将默认测试集指定为你现有的 p_v_256.hdf5 ---
 if test_file is not None:
     if os.path.isabs(test_file):
         test_data_dir = test_file
@@ -77,11 +88,12 @@ if test_file is not None:
         test_data_dir = test_file
     else:
         test_data_dir = os.path.join(args.data_dir, test_file)
+elif getattr(args, 'ndim', 2) == 3:
+    test_data_dir = train_data_dir
 else:
-    test_data_dir = os.path.join(args.data_dir, 'p_v_256.hdf5')
+    test_data_dir = args.data_dir + '/kle{}_mc{}.hdf5'.format(args.kle, args.ntest)
 
-
-# 自动推断通道数和尺寸
+# auto-detect channels and output size for 3D from training file
 if getattr(args, 'ndim', 2) == 3:
     try:
         with h5py.File(train_data_dir, 'r') as f:
@@ -103,62 +115,37 @@ if getattr(args, 'ndim', 2) == 3:
                 args.nic = 1
     except Exception as e:
         print('Warning: failed to infer 3D data shapes from {}: {}'.format(train_data_dir, e))
-else:
-    # 对于2D模式，也自动检测通道数
-    try:
-        with h5py.File(train_data_dir, 'r') as f:
-            # 检测输出通道数
-            y_shape = f['output'].shape
-            if len(y_shape) == 5 and y_shape[2] == 1:  # (N, C, 1, H, W) 压缩后变成 (N, C, H, W)
-                args.noc = y_shape[1]
-            elif len(y_shape) == 4:
-                args.noc = y_shape[1]
-            else:
-                args.noc = getattr(args, 'noc', 3)
-            
-            # 检测输入通道数
-            if 'sensor_input' in f:
-                x_shape = f['sensor_input'].shape
-            else:
-                x_shape = f['input'].shape
-            if len(x_shape) == 3:  # (N, H, W) 会在load_data转为 (N, 1, H, W)
-                args.nic = 1
-            elif len(x_shape) >= 4:
-                args.nic = x_shape[1]
-            else:
-                args.nic = 1
-    except Exception as e:
-        print('Warning: failed to infer 2D data shapes from {}: {}'.format(train_data_dir, e))
 
-model_kwargs = {
-    'in_channels': getattr(args, 'nic', 1),
-    'out_channels': getattr(args, 'noc', 3),
-    'blocks': args.blocks,
-    'growth_rate': args.growth_rate,
-    'init_features': args.init_features,
-    'drop_rate': args.drop_rate,
-    'bn_size': args.bn_size,
-    'bottleneck': args.bottleneck,
-    'out_activation': None
-}
-
-if getattr(args, 'ndim', 2) == 3:
-    model_kwargs['output_size'] = tuple(getattr(args, 'image_size', [1, 65, 65]))
-
-model = DenseED(**model_kwargs).to(device)
+# initialize model
+model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=getattr(args, 'noc', 3), 
+                blocks=args.blocks,
+                growth_rate=args.growth_rate, 
+                init_features=args.init_features,
+                drop_rate=args.drop_rate,
+                bn_size=args.bn_size,
+                bottleneck=args.bottleneck,
+                out_activation=None,
+                output_size=tuple(getattr(args, 'image_size', [1, 65, 65])) if getattr(args, 'ndim', 2) == 3 else None).to(device)
 print(model)
 
-# 这里就会直接去加载 ./dataset/p_v_256.hdf5 了
 train_loader, _ = load_data(train_data_dir, args.batch_size)
 test_loader, _ = load_data(test_data_dir, args.test_batch_size)
-print('Loaded data successfully from:', train_data_dir)
+print('Loaded data!')
 
-optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-7)
+optimizer = optim.Adam(model.parameters(), lr=args.lr,
+                       weight_decay=args.weight_decay)
+scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
+                    #verbose=True, 
+                    threshold=0.0001, threshold_mode='rel',
+                    cooldown=0, min_lr=0, eps=1e-8)
 
-logger = {'rmse_train': [], 'rmse_test': [], 'r2_train': [], 'r2_test': [], 
-          'loss_train': [], 'loss_test': [], 'time': []}
-best_r2 = -float('inf') 
+logger = {}
+logger['rmse_train'] = []
+logger['rmse_test'] = []
+logger['r2_train'] = []
+logger['r2_test'] = []
+logger['time'] = []
+
 
 def build_t_mask(output):
     h, w = output.shape[-2:]
@@ -178,143 +165,79 @@ def build_t_mask(output):
         return mask_2d.unsqueeze(0).unsqueeze(0).unsqueeze(2).repeat(1, 1, d, 1, 1)
     raise ValueError('Unsupported output dim {}'.format(output.dim()))
 
-def get_spatial_gradients_1st_2nd(tensor):
-    """同时计算一阶和二阶空间梯度，二阶梯度直接对应流体力学的拉普拉斯粘性项"""
-    grads_1st, grads_2nd = [], []
-    for dim in range(2, tensor.dim()):
-        sp, sm = [slice(None)] * tensor.dim(), [slice(None)] * tensor.dim()
-        sp[dim], sm[dim] = slice(1, None), slice(None, -1)
-        grads_1st.append(tensor[tuple(sp)] - tensor[tuple(sm)])
-        
-        sc = [slice(None)] * tensor.dim()
-        sc[dim] = slice(1, -1)
-        sp2, sm2 = [slice(None)] * tensor.dim(), [slice(None)] * tensor.dim()
-        sp2[dim], sm2[dim] = slice(2, None), slice(None, -2)
-        grads_2nd.append(tensor[tuple(sp2)] - 2.0 * tensor[tuple(sc)] + tensor[tuple(sm2)])
-    return grads_1st, grads_2nd
-
-def test(epoch):
-    global best_r2
+def test(epoch):#epoch is a number
     model.eval()
     mse = 0.
     n_out_pixels_test = 0
-    masked_sum_y, masked_sum_y2 = 0., 0.
-    
-    with torch.no_grad():
-        for batch_idx, (input, target) in enumerate(test_loader):
-            input, target = input.to(device), target.to(device)
-            output = model(input)
-            t_mask = build_t_mask(output)
-            t_mask = t_mask.expand(output.shape[0], output.shape[1], *output.shape[2:])
-            masked_output, masked_target = output * t_mask, target * t_mask
-            
-            mse += F.mse_loss(masked_output, masked_target, reduction='sum').item()
-            n_out_pixels_test += t_mask.sum().item()
-            masked_sum_y += masked_target.sum().item()
-            masked_sum_y2 += (masked_target ** 2).sum().item()
+    masked_sum_y = 0.
+    masked_sum_y2 = 0.
+    for batch_idx, (input, target) in enumerate(test_loader):
+        input, target = input.to(device), target.to(device)
+        output = model(input)
+        t_mask = build_t_mask(output)
+        t_mask = t_mask.expand(output.shape[0], output.shape[1], *output.shape[2:])
+        masked_output = output * t_mask
+        masked_target = target * t_mask
+        mse += F.mse_loss(masked_output, masked_target, reduction='sum').item()
+        n_out_pixels_test += t_mask.sum().item()
+        masked_sum_y += masked_target.sum().item()
+        masked_sum_y2 += (masked_target ** 2).sum().item()
 
-            if epoch % args.plot_freq == 0 and batch_idx == 0:
-                n_samples = 6 if epoch == args.epochs else 2
-                idx = torch.randperm(input.size(0))[:n_samples]
-                samples_output = masked_output.data.cpu()[idx].numpy()
-                samples_target = masked_target.data.cpu()[idx].numpy()
+        # plot predictions
+        if epoch % args.plot_freq == 0 and batch_idx == 0:
+            n_samples = 6 if epoch == args.epochs else 2
+            idx = torch.randperm(input.size(0))[:n_samples]
+            samples_output = masked_output.data.cpu()[idx].numpy()
+            samples_target = masked_target.data.cpu()[idx].numpy()
 
-                for i in range(n_samples):
-                    plot_prediction_det(args.pred_dir, samples_target[i], 
-                        samples_output[i], epoch, i, plot_fn=args.plot_fn)
+            for i in range(n_samples):
+                print('epoch {}: plotting prediction {}'.format(epoch, i))
+                plot_prediction_det(args.pred_dir, samples_target[i], 
+                    samples_output[i], epoch, i, plot_fn=args.plot_fn)
 
     rmse_test = np.sqrt(mse / max(n_out_pixels_test, 1.0))
     ss_tot = masked_sum_y2 - (masked_sum_y ** 2) / max(n_out_pixels_test, 1.0)
     r2_score = 1 - mse / max(ss_tot, 1e-12)
-    print("epoch: {}, test    r2-score:  {:.6f}, rmse: {:.6f}".format(epoch, r2_score, rmse_test))
-
-    # 保存最佳模型及其检查点
-    if r2_score > best_r2:
-        best_r2 = r2_score
-        save_path = os.path.join(args.ckpt_dir, "best_p_v_256_model.pth")
-        torch.save(model.state_dict(), save_path)
-        print(f"--> [New Best R2: {best_r2:.6f}] Saved model to {save_path}")
+    print("epoch: {}, test r2-score:  {:.6f}".format(epoch, r2_score))
 
     if epoch % args.log_freq == 0:
         logger['r2_test'].append(r2_score)
         logger['rmse_test'].append(rmse_test)
-        logger['loss_test'].append(rmse_test)
 
 def train(epoch):
-    """
-    优化的训练函数，采用多阶段训练策略和动态损失权重：
-    - Epoch 1-50: 重点学习基础特征 (lambda_grad = 0.3)
-    - Epoch 51-150: 增强物理约束 (lambda_grad = 1.5) 
-    - Epoch 151+: 精细调整所有项 (lambda_grad = 2.0)
-    """
     model.train()
     mse = 0.
     n_out_pixels_train = 0
-    masked_sum_y, masked_sum_y2 = 0., 0.
-    total_loss = 0.
-    
-    # 动态调整梯度损失权重 - 多阶段训练策略
-    if epoch <= 50:
-        lambda_grad = 0.3
-        lambda_l1_base = 0.5
-    elif epoch <= 150:
-        lambda_grad = 1.5
-        lambda_l1_base = 0.7
-    else:
-        lambda_grad = 2.0
-        lambda_l1_base = 0.8
-    
+    masked_sum_y = 0.
+    masked_sum_y2 = 0.
     for _, (input, target) in enumerate(train_loader):
         input, target = input.to(device), target.to(device)
         model.zero_grad()
         output = model(input)
         t_mask = build_t_mask(output)
         t_mask = t_mask.expand(output.shape[0], output.shape[1], *output.shape[2:])
-        
-        masked_output, masked_target = output * t_mask, target * t_mask
-        pixel_count = max(t_mask.sum().item(), 1.0)
-        
-        # 1. 基础损失：加权的MSE + L1混合损失，更多偏向于相似性
-        loss_mse = F.mse_loss(masked_output, masked_target, reduction='sum') / pixel_count
-        loss_l1 = F.l1_loss(masked_output, masked_target, reduction='sum') / pixel_count
-        loss_base = 1.0 * loss_mse + lambda_l1_base * loss_l1
-        
-        # 2. 梯度损失：一阶和二阶梯度约束
-        loss_grad = 0.0
-        out_g1, out_g2 = get_spatial_gradients_1st_2nd(masked_output)
-        tar_g1, tar_g2 = get_spatial_gradients_1st_2nd(masked_target)
-        
-        # 一阶梯度损失（边界约束）
-        for og, tg in zip(out_g1, tar_g1):
-            loss_grad += 0.5 * F.l1_loss(og, tg, reduction='sum') / pixel_count
-        
-        # 二阶梯度损失（流体力学粘性约束 - 最重要!）
-        for og, tg in zip(out_g2, tar_g2):
-            loss_grad += 1.0 * F.l1_loss(og, tg, reduction='sum') / pixel_count
-        
-        # 3. 组合总损失
-        loss = loss_base + lambda_grad * loss_grad
-        
+        masked_output = output * t_mask
+        masked_target = target * t_mask
+        loss = F.l1_loss(masked_output, masked_target, reduction='sum')
         loss.backward()
         optimizer.step()
-        
         mse += F.mse_loss(masked_output, masked_target, reduction='sum').item()
         n_out_pixels_train += t_mask.sum().item()
         masked_sum_y += masked_target.sum().item()
         masked_sum_y2 += (masked_target ** 2).sum().item()
-        total_loss += loss.item()
 
     rmse = np.sqrt(mse / max(n_out_pixels_train, 1.0))
+    scheduler.step(rmse)
     ss_tot = masked_sum_y2 - (masked_sum_y ** 2) / max(n_out_pixels_train, 1.0)
     r2_score = 1 - mse / max(ss_tot, 1e-12)
-    avg_loss = total_loss / max(len(train_loader), 1)
-    print("epoch: {}, training r2-score: {:.6f}, loss: {:.6f}, lambda_grad: {:.2f}".format(
-        epoch, r2_score, avg_loss, lambda_grad))
-    
+    print("epoch: {}, training r2-score: {:.6f}".format(epoch, r2_score))
     if epoch % args.log_freq == 0:
         logger['r2_train'].append(r2_score)
         logger['rmse_train'].append(rmse)
-        logger['loss_train'].append(avg_loss)
+    # save model
+    if epoch % args.ckpt_freq == 0:
+        torch.save(model.state_dict(), args.ckpt_dir + "/model_epoch{}.pth".format(epoch))
+
 
 print('Start training........................................................')
 tic = time()
@@ -329,14 +252,13 @@ else:
         train(epoch)
         with torch.no_grad():
             test(epoch)
-        scheduler.step()
-        
     tic2 = time()
-    print("Finished training {} epochs with {} data using {} seconds"
+    print("Finished training {} epochs with {} data using {} seconds (including long... plotting time)"
         .format(args.epochs, args.ntrain, tic2 - tic))
 
 x_axis = np.arange(args.log_freq, args.epochs + args.log_freq, args.log_freq)
 logger['time'].append(tic2 - tic)
+# plot the rmse, r2-score curve and save them in txt
 save_stats(args.train_dir, logger, x_axis)
 
 args.training_time = tic2 - tic
