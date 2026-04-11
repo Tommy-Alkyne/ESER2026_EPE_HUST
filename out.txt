@@ -1,0 +1,569 @@
+Random Seed:  1
+Arguments:
+{'batch_size': 32,
+ 'blocks': [3, 6, 3],
+ 'bn_size': 8,
+ 'bottleneck': False,
+ 'ckpt_dir': './experiments/new-test-9/kle4225/ntrain512_blocks[3, 6, '
+             '3]_growth16_nif48_drop0.0_batch32_lr0.003_wd0.0005_epochs200/checkpoints',
+ 'ckpt_epoch': None,
+ 'ckpt_freq': 25,
+ 'data_dir': './dataset',
+ 'drop_rate': 0.0,
+ 'epochs': 200,
+ 'exp_dir': './experiments',
+ 'exp_name': 'new-test-9',
+ 'growth_rate': 16,
+ 'image_size': [1, 137, 137],
+ 'init_features': 48,
+ 'kle': 4225,
+ 'lambda_grad': 2.0,
+ 'lambda_l1': 1.0,
+ 'log_freq': 2,
+ 'lr': 0.003,
+ 'ndim': 3,
+ 'nic': 3,
+ 'noc': 3,
+ 'ntest': 500,
+ 'ntrain': 512,
+ 'plot_fn': 'contourf',
+ 'plot_freq': 25,
+ 'post': False,
+ 'run_dir': './experiments/new-test-9/kle4225/ntrain512_blocks[3, 6, '
+            '3]_growth16_nif48_drop0.0_batch32_lr0.003_wd0.0005_epochs200',
+ 'seed': 1,
+ 'test_batch_size': 100,
+ 'test_file': 'p_v_256.hdf5',
+ 'train_file': 'p_v_256.hdf5',
+ 'weight_decay': 0.0005}
+# params 302040, # conv layers 19
+DenseED3D(
+  (in_conv): Conv3d(1, 48, kernel_size=(1, 7, 7), stride=(1, 2, 2), padding=(0, 2, 2), bias=False)
+  (enc_blocks): ModuleList(
+    (0): _DenseBlock3D(
+      (denselayer1): _DenseLayer3D(
+        (norm1): BatchNorm3d(48, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(48, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+      (denselayer2): _DenseLayer3D(
+        (norm1): BatchNorm3d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(64, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+      (denselayer3): _DenseLayer3D(
+        (norm1): BatchNorm3d(80, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(80, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+    )
+  )
+  (trans_downs): ModuleList(
+    (0): _Transition3D(
+      (norm1): BatchNorm3d(96, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+      (conv1): Conv3d(96, 48, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (norm2): BatchNorm3d(48, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (relu2): LeakyReLU(negative_slope=0.1, inplace=True)
+      (conv2): Conv3d(48, 48, kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1), bias=False)
+    )
+  )
+  (dec_blocks): ModuleList(
+    (0): _DenseBlock3D(
+      (denselayer1): _DenseLayer3D(
+        (norm1): BatchNorm3d(48, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(48, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+      (denselayer2): _DenseLayer3D(
+        (norm1): BatchNorm3d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(64, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+      (denselayer3): _DenseLayer3D(
+        (norm1): BatchNorm3d(80, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(80, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+      (denselayer4): _DenseLayer3D(
+        (norm1): BatchNorm3d(96, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(96, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+      (denselayer5): _DenseLayer3D(
+        (norm1): BatchNorm3d(112, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(112, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+      (denselayer6): _DenseLayer3D(
+        (norm1): BatchNorm3d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(128, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+    )
+    (1): _DenseBlock3D(
+      (denselayer1): _DenseLayer3D(
+        (norm1): BatchNorm3d(168, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(168, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+      (denselayer2): _DenseLayer3D(
+        (norm1): BatchNorm3d(184, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(184, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+      (denselayer3): _DenseLayer3D(
+        (norm1): BatchNorm3d(200, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+        (conv1): Conv3d(200, 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+      )
+    )
+  )
+  (trans_ups): ModuleList(
+    (0): _Transition3D(
+      (norm1): BatchNorm3d(144, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+      (conv1): Conv3d(144, 72, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+      (norm2): BatchNorm3d(72, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (relu2): LeakyReLU(negative_slope=0.1, inplace=True)
+      (upsample2): Upsample(scale_factor=(1.0, 2.0, 2.0), mode='trilinear')
+      (conv2): Conv3d(72, 72, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+    )
+  )
+  (last_trans_up): Sequential(
+    (norm1): BatchNorm3d(216, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (relu1): LeakyReLU(negative_slope=0.1, inplace=True)
+    (conv1): Conv3d(216, 108, kernel_size=(1, 1, 1), stride=(1, 1, 1), bias=False)
+    (norm2): BatchNorm3d(108, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (relu2): LeakyReLU(negative_slope=0.1, inplace=True)
+    (upsample2): Upsample(scale_factor=(1.0, 2.0, 2.0), mode='trilinear')
+    (conv2): Conv3d(108, 4, kernel_size=(1, 4, 4), stride=(1, 1, 1), padding=(0, 1, 1), bias=False)
+  )
+)
+input data shape: (256, 25)
+output data shape: (256, 4, 1, 137, 137)
+input data shape: (256, 25)
+output data shape: (256, 4, 1, 137, 137)
+Loaded data!
+Start training........................................................
+epoch: 1, training r2-score: 0.333189
+epoch: 1, test r2-score:  0.084166
+epoch: 2, training r2-score: 0.690975
+epoch: 2, test r2-score:  0.252669
+epoch: 3, training r2-score: 0.698040
+epoch: 3, test r2-score:  0.429017
+epoch: 4, training r2-score: 0.751638
+epoch: 4, test r2-score:  0.584711
+epoch: 5, training r2-score: 0.782630
+epoch: 5, test r2-score:  0.774195
+epoch: 6, training r2-score: 0.768622
+epoch: 6, test r2-score:  0.624007
+epoch: 7, training r2-score: 0.776476
+epoch: 7, test r2-score:  0.766405
+epoch: 8, training r2-score: 0.804910
+epoch: 8, test r2-score:  0.803454
+epoch: 9, training r2-score: 0.819046
+epoch: 9, test r2-score:  0.719448
+epoch: 10, training r2-score: 0.839687
+epoch: 10, test r2-score:  0.805385
+epoch: 11, training r2-score: 0.852529
+epoch: 11, test r2-score:  0.808636
+epoch: 12, training r2-score: 0.860221
+epoch: 12, test r2-score:  0.861488
+epoch: 13, training r2-score: 0.860379
+epoch: 13, test r2-score:  0.858175
+epoch: 14, training r2-score: 0.870068
+epoch: 14, test r2-score:  0.837832
+epoch: 15, training r2-score: 0.882495
+epoch: 15, test r2-score:  0.870421
+epoch: 16, training r2-score: 0.892600
+epoch: 16, test r2-score:  0.878522
+epoch: 17, training r2-score: 0.898503
+epoch: 17, test r2-score:  0.882005
+epoch: 18, training r2-score: 0.904155
+epoch: 18, test r2-score:  0.869545
+epoch: 19, training r2-score: 0.912785
+epoch: 19, test r2-score:  0.898494
+epoch: 20, training r2-score: 0.906215
+epoch: 20, test r2-score:  0.914549
+epoch: 21, training r2-score: 0.918121
+epoch: 21, test r2-score:  0.910829
+epoch: 22, training r2-score: 0.908823
+epoch: 22, test r2-score:  0.899515
+epoch: 23, training r2-score: 0.920973
+epoch: 23, test r2-score:  0.923704
+epoch: 24, training r2-score: 0.926360
+epoch: 24, test r2-score:  0.912285
+epoch: 25, training r2-score: 0.932134
+epoch 25: plotting prediction 0
+epoch 25: plotting prediction 1
+epoch: 25, test r2-score:  0.921379
+epoch: 26, training r2-score: 0.924327
+epoch: 26, test r2-score:  0.927990
+epoch: 27, training r2-score: 0.907247
+epoch: 27, test r2-score:  0.902459
+epoch: 28, training r2-score: 0.927095
+epoch: 28, test r2-score:  0.902287
+epoch: 29, training r2-score: 0.933136
+epoch: 29, test r2-score:  0.902085
+epoch: 30, training r2-score: 0.940321
+epoch: 30, test r2-score:  0.939676
+epoch: 31, training r2-score: 0.935731
+epoch: 31, test r2-score:  0.937074
+epoch: 32, training r2-score: 0.944980
+epoch: 32, test r2-score:  0.956062
+epoch: 33, training r2-score: 0.946617
+epoch: 33, test r2-score:  0.952410
+epoch: 34, training r2-score: 0.944036
+epoch: 34, test r2-score:  0.948703
+epoch: 35, training r2-score: 0.954036
+epoch: 35, test r2-score:  0.956912
+epoch: 36, training r2-score: 0.958072
+epoch: 36, test r2-score:  0.962223
+epoch: 37, training r2-score: 0.941128
+epoch: 37, test r2-score:  0.920032
+epoch: 38, training r2-score: 0.940454
+epoch: 38, test r2-score:  0.940783
+epoch: 39, training r2-score: 0.942882
+epoch: 39, test r2-score:  0.868631
+epoch: 40, training r2-score: 0.936920
+epoch: 40, test r2-score:  0.907880
+epoch: 41, training r2-score: 0.956538
+epoch: 41, test r2-score:  0.951431
+epoch: 42, training r2-score: 0.963175
+epoch: 42, test r2-score:  0.949057
+epoch: 43, training r2-score: 0.963636
+epoch: 43, test r2-score:  0.959725
+epoch: 44, training r2-score: 0.966386
+epoch: 44, test r2-score:  0.957467
+epoch: 45, training r2-score: 0.966474
+epoch: 45, test r2-score:  0.972471
+epoch: 46, training r2-score: 0.958664
+epoch: 46, test r2-score:  0.959243
+epoch: 47, training r2-score: 0.964824
+epoch: 47, test r2-score:  0.973850
+epoch: 48, training r2-score: 0.957983
+epoch: 48, test r2-score:  0.937168
+epoch: 49, training r2-score: 0.946611
+epoch: 49, test r2-score:  0.956676
+epoch: 50, training r2-score: 0.955235
+epoch 50: plotting prediction 0
+epoch 50: plotting prediction 1
+epoch: 50, test r2-score:  0.953068
+epoch: 51, training r2-score: 0.957390
+epoch: 51, test r2-score:  0.957384
+epoch: 52, training r2-score: 0.968669
+epoch: 52, test r2-score:  0.972260
+epoch: 53, training r2-score: 0.959356
+epoch: 53, test r2-score:  0.970037
+epoch: 54, training r2-score: 0.971170
+epoch: 54, test r2-score:  0.972368
+epoch: 55, training r2-score: 0.971448
+epoch: 55, test r2-score:  0.973977
+epoch: 56, training r2-score: 0.972411
+epoch: 56, test r2-score:  0.976508
+epoch: 57, training r2-score: 0.968487
+epoch: 57, test r2-score:  0.975047
+epoch: 58, training r2-score: 0.974441
+epoch: 58, test r2-score:  0.972725
+epoch: 59, training r2-score: 0.973601
+epoch: 59, test r2-score:  0.981687
+epoch: 60, training r2-score: 0.974366
+epoch: 60, test r2-score:  0.980292
+epoch: 61, training r2-score: 0.974196
+epoch: 61, test r2-score:  0.960941
+epoch: 62, training r2-score: 0.974556
+epoch: 62, test r2-score:  0.978159
+epoch: 63, training r2-score: 0.970396
+epoch: 63, test r2-score:  0.976330
+epoch: 64, training r2-score: 0.970142
+epoch: 64, test r2-score:  0.975327
+epoch: 65, training r2-score: 0.976728
+epoch: 65, test r2-score:  0.960169
+epoch: 66, training r2-score: 0.974581
+epoch: 66, test r2-score:  0.973860
+epoch: 67, training r2-score: 0.969653
+epoch: 67, test r2-score:  0.982409
+epoch: 68, training r2-score: 0.971669
+epoch: 68, test r2-score:  0.974745
+epoch: 69, training r2-score: 0.976496
+epoch: 69, test r2-score:  0.982073
+epoch: 70, training r2-score: 0.976625
+epoch: 70, test r2-score:  0.973983
+epoch: 71, training r2-score: 0.976673
+epoch: 71, test r2-score:  0.980478
+epoch: 72, training r2-score: 0.978606
+epoch: 72, test r2-score:  0.969912
+epoch: 73, training r2-score: 0.975424
+epoch: 73, test r2-score:  0.980691
+epoch: 74, training r2-score: 0.977480
+epoch: 74, test r2-score:  0.984323
+epoch: 75, training r2-score: 0.976680
+epoch 75: plotting prediction 0
+epoch 75: plotting prediction 1
+epoch: 75, test r2-score:  0.956964
+epoch: 76, training r2-score: 0.971003
+epoch: 76, test r2-score:  0.957110
+epoch: 77, training r2-score: 0.971942
+epoch: 77, test r2-score:  0.977766
+epoch: 78, training r2-score: 0.976970
+epoch: 78, test r2-score:  0.981295
+epoch: 79, training r2-score: 0.979581
+epoch: 79, test r2-score:  0.983417
+epoch: 80, training r2-score: 0.974871
+epoch: 80, test r2-score:  0.977484
+epoch: 81, training r2-score: 0.976305
+epoch: 81, test r2-score:  0.976664
+epoch: 82, training r2-score: 0.980407
+epoch: 82, test r2-score:  0.979629
+epoch: 83, training r2-score: 0.982951
+epoch: 83, test r2-score:  0.981498
+epoch: 84, training r2-score: 0.980571
+epoch: 84, test r2-score:  0.976459
+epoch: 85, training r2-score: 0.978984
+epoch: 85, test r2-score:  0.986947
+epoch: 86, training r2-score: 0.980335
+epoch: 86, test r2-score:  0.984701
+epoch: 87, training r2-score: 0.982608
+epoch: 87, test r2-score:  0.983730
+epoch: 88, training r2-score: 0.980950
+epoch: 88, test r2-score:  0.986515
+epoch: 89, training r2-score: 0.984387
+epoch: 89, test r2-score:  0.987538
+epoch: 90, training r2-score: 0.983354
+epoch: 90, test r2-score:  0.986253
+epoch: 91, training r2-score: 0.981638
+epoch: 91, test r2-score:  0.971095
+epoch: 92, training r2-score: 0.975379
+epoch: 92, test r2-score:  0.981280
+epoch: 93, training r2-score: 0.976169
+epoch: 93, test r2-score:  0.984344
+epoch: 94, training r2-score: 0.976971
+epoch: 94, test r2-score:  0.974679
+epoch: 95, training r2-score: 0.975034
+epoch: 95, test r2-score:  0.979064
+epoch: 96, training r2-score: 0.979990
+epoch: 96, test r2-score:  0.987055
+epoch: 97, training r2-score: 0.976176
+epoch: 97, test r2-score:  0.977786
+epoch: 98, training r2-score: 0.980047
+epoch: 98, test r2-score:  0.968919
+epoch: 99, training r2-score: 0.980282
+epoch: 99, test r2-score:  0.981116
+epoch: 100, training r2-score: 0.974919
+epoch 100: plotting prediction 0
+epoch 100: plotting prediction 1
+epoch: 100, test r2-score:  0.958989
+epoch: 101, training r2-score: 0.981512
+epoch: 101, test r2-score:  0.986532
+epoch: 102, training r2-score: 0.986620
+epoch: 102, test r2-score:  0.989822
+epoch: 103, training r2-score: 0.988021
+epoch: 103, test r2-score:  0.990650
+epoch: 104, training r2-score: 0.987710
+epoch: 104, test r2-score:  0.991728
+epoch: 105, training r2-score: 0.986211
+epoch: 105, test r2-score:  0.991987
+epoch: 106, training r2-score: 0.989346
+epoch: 106, test r2-score:  0.992085
+epoch: 107, training r2-score: 0.989068
+epoch: 107, test r2-score:  0.991970
+epoch: 108, training r2-score: 0.988418
+epoch: 108, test r2-score:  0.991506
+epoch: 109, training r2-score: 0.989001
+epoch: 109, test r2-score:  0.992466
+epoch: 110, training r2-score: 0.985530
+epoch: 110, test r2-score:  0.991330
+epoch: 111, training r2-score: 0.989109
+epoch: 111, test r2-score:  0.992151
+epoch: 112, training r2-score: 0.989802
+epoch: 112, test r2-score:  0.992415
+epoch: 113, training r2-score: 0.990845
+epoch: 113, test r2-score:  0.992262
+epoch: 114, training r2-score: 0.990085
+epoch: 114, test r2-score:  0.992473
+epoch: 115, training r2-score: 0.989751
+epoch: 115, test r2-score:  0.992168
+epoch: 116, training r2-score: 0.989692
+epoch: 116, test r2-score:  0.992472
+epoch: 117, training r2-score: 0.989852
+epoch: 117, test r2-score:  0.992417
+epoch: 118, training r2-score: 0.989459
+epoch: 118, test r2-score:  0.992803
+epoch: 119, training r2-score: 0.989940
+epoch: 119, test r2-score:  0.992398
+epoch: 120, training r2-score: 0.990867
+epoch: 120, test r2-score:  0.992754
+epoch: 121, training r2-score: 0.988764
+epoch: 121, test r2-score:  0.992580
+epoch: 122, training r2-score: 0.990131
+epoch: 122, test r2-score:  0.992684
+epoch: 123, training r2-score: 0.988822
+epoch: 123, test r2-score:  0.992525
+epoch: 124, training r2-score: 0.991269
+epoch: 124, test r2-score:  0.992826
+epoch: 125, training r2-score: 0.986396
+epoch 125: plotting prediction 0
+epoch 125: plotting prediction 1
+epoch: 125, test r2-score:  0.992679
+epoch: 126, training r2-score: 0.990677
+epoch: 126, test r2-score:  0.992692
+epoch: 127, training r2-score: 0.988824
+epoch: 127, test r2-score:  0.992610
+epoch: 128, training r2-score: 0.988578
+epoch: 128, test r2-score:  0.992137
+epoch: 129, training r2-score: 0.988886
+epoch: 129, test r2-score:  0.992816
+epoch: 130, training r2-score: 0.990886
+epoch: 130, test r2-score:  0.992858
+epoch: 131, training r2-score: 0.990103
+epoch: 131, test r2-score:  0.992914
+epoch: 132, training r2-score: 0.990496
+epoch: 132, test r2-score:  0.992483
+epoch: 133, training r2-score: 0.989225
+epoch: 133, test r2-score:  0.992131
+epoch: 134, training r2-score: 0.991015
+epoch: 134, test r2-score:  0.992199
+epoch: 135, training r2-score: 0.989563
+epoch: 135, test r2-score:  0.992728
+epoch: 136, training r2-score: 0.989511
+epoch: 136, test r2-score:  0.992938
+epoch: 137, training r2-score: 0.990581
+epoch: 137, test r2-score:  0.992949
+epoch: 138, training r2-score: 0.988098
+epoch: 138, test r2-score:  0.993027
+epoch: 139, training r2-score: 0.989636
+epoch: 139, test r2-score:  0.992949
+epoch: 140, training r2-score: 0.989942
+epoch: 140, test r2-score:  0.992831
+epoch: 141, training r2-score: 0.991245
+epoch: 141, test r2-score:  0.993075
+epoch: 142, training r2-score: 0.988248
+epoch: 142, test r2-score:  0.993164
+epoch: 143, training r2-score: 0.991061
+epoch: 143, test r2-score:  0.993152
+epoch: 144, training r2-score: 0.989790
+epoch: 144, test r2-score:  0.993151
+epoch: 145, training r2-score: 0.991693
+epoch: 145, test r2-score:  0.993120
+epoch: 146, training r2-score: 0.989125
+epoch: 146, test r2-score:  0.993103
+epoch: 147, training r2-score: 0.990447
+epoch: 147, test r2-score:  0.993166
+epoch: 148, training r2-score: 0.990012
+epoch: 148, test r2-score:  0.993154
+epoch: 149, training r2-score: 0.989542
+epoch: 149, test r2-score:  0.993153
+epoch: 150, training r2-score: 0.990386
+epoch 150: plotting prediction 0
+epoch 150: plotting prediction 1
+epoch: 150, test r2-score:  0.993127
+epoch: 151, training r2-score: 0.990669
+epoch: 151, test r2-score:  0.993127
+epoch: 152, training r2-score: 0.991361
+epoch: 152, test r2-score:  0.993129
+epoch: 153, training r2-score: 0.991940
+epoch: 153, test r2-score:  0.993166
+epoch: 154, training r2-score: 0.991079
+epoch: 154, test r2-score:  0.993141
+epoch: 155, training r2-score: 0.991191
+epoch: 155, test r2-score:  0.993159
+epoch: 156, training r2-score: 0.991432
+epoch: 156, test r2-score:  0.993177
+epoch: 157, training r2-score: 0.992243
+epoch: 157, test r2-score:  0.993167
+epoch: 158, training r2-score: 0.991031
+epoch: 158, test r2-score:  0.993174
+epoch: 159, training r2-score: 0.990477
+epoch: 159, test r2-score:  0.993142
+epoch: 160, training r2-score: 0.988566
+epoch: 160, test r2-score:  0.993083
+epoch: 161, training r2-score: 0.988636
+epoch: 161, test r2-score:  0.992841
+epoch: 162, training r2-score: 0.991091
+epoch: 162, test r2-score:  0.993135
+epoch: 163, training r2-score: 0.989636
+epoch: 163, test r2-score:  0.993113
+epoch: 164, training r2-score: 0.991642
+epoch: 164, test r2-score:  0.993158
+epoch: 165, training r2-score: 0.990440
+epoch: 165, test r2-score:  0.993131
+epoch: 166, training r2-score: 0.987554
+epoch: 166, test r2-score:  0.993143
+epoch: 167, training r2-score: 0.991586
+epoch: 167, test r2-score:  0.993197
+epoch: 168, training r2-score: 0.991148
+epoch: 168, test r2-score:  0.993109
+epoch: 169, training r2-score: 0.989870
+epoch: 169, test r2-score:  0.993165
+epoch: 170, training r2-score: 0.990274
+epoch: 170, test r2-score:  0.993130
+epoch: 171, training r2-score: 0.991440
+epoch: 171, test r2-score:  0.993170
+epoch: 172, training r2-score: 0.991274
+epoch: 172, test r2-score:  0.993167
+epoch: 173, training r2-score: 0.990741
+epoch: 173, test r2-score:  0.993119
+epoch: 174, training r2-score: 0.989127
+epoch: 174, test r2-score:  0.993214
+epoch: 175, training r2-score: 0.991040
+epoch 175: plotting prediction 0
+epoch 175: plotting prediction 1
+epoch: 175, test r2-score:  0.993200
+epoch: 176, training r2-score: 0.991383
+epoch: 176, test r2-score:  0.993211
+epoch: 177, training r2-score: 0.991390
+epoch: 177, test r2-score:  0.993201
+epoch: 178, training r2-score: 0.991818
+epoch: 178, test r2-score:  0.993194
+epoch: 179, training r2-score: 0.990626
+epoch: 179, test r2-score:  0.993155
+epoch: 180, training r2-score: 0.990762
+epoch: 180, test r2-score:  0.993085
+epoch: 181, training r2-score: 0.989091
+epoch: 181, test r2-score:  0.993211
+epoch: 182, training r2-score: 0.991753
+epoch: 182, test r2-score:  0.993223
+epoch: 183, training r2-score: 0.991666
+epoch: 183, test r2-score:  0.993200
+epoch: 184, training r2-score: 0.989654
+epoch: 184, test r2-score:  0.993216
+epoch: 185, training r2-score: 0.989064
+epoch: 185, test r2-score:  0.993160
+epoch: 186, training r2-score: 0.987743
+epoch: 186, test r2-score:  0.993203
+epoch: 187, training r2-score: 0.990978
+epoch: 187, test r2-score:  0.993188
+epoch: 188, training r2-score: 0.990711
+epoch: 188, test r2-score:  0.993188
+epoch: 189, training r2-score: 0.987593
+epoch: 189, test r2-score:  0.993121
+epoch: 190, training r2-score: 0.989294
+epoch: 190, test r2-score:  0.993155
+epoch: 191, training r2-score: 0.989586
+epoch: 191, test r2-score:  0.993127
+epoch: 192, training r2-score: 0.990754
+epoch: 192, test r2-score:  0.993199
+epoch: 193, training r2-score: 0.988905
+epoch: 193, test r2-score:  0.993227
+epoch: 194, training r2-score: 0.988873
+epoch: 194, test r2-score:  0.993219
+epoch: 195, training r2-score: 0.989865
+epoch: 195, test r2-score:  0.993205
+epoch: 196, training r2-score: 0.989330
+epoch: 196, test r2-score:  0.993182
+epoch: 197, training r2-score: 0.990798
+epoch: 197, test r2-score:  0.993204
+epoch: 198, training r2-score: 0.990321
+epoch: 198, test r2-score:  0.993203
+epoch: 199, training r2-score: 0.991198
+epoch: 199, test r2-score:  0.993206
+epoch: 200, training r2-score: 0.991244
+epoch 200: plotting prediction 0
+epoch 200: plotting prediction 1
+epoch 200: plotting prediction 2
+epoch 200: plotting prediction 3
+epoch 200: plotting prediction 4
+epoch 200: plotting prediction 5
+epoch: 200, test r2-score:  0.993174
+Finished training 200 epochs with 512 data using 183.516361951828 seconds (including long... plotting time)

@@ -23,8 +23,8 @@ STAGE2_DESCRIPTION = "物理约束增强阶段"
 
 # 阶段3: 精细调整 (Epoch 151+)
 # 目标: 最大化预测精度，微调所有项
-STAGE3_LAMBDA_GRAD = 2.0      # 梯度损失权重最高
-STAGE3_LAMBDA_L1_BASE = 0.8   # L1正则化最高
+STAGE3_LAMBDA_GRAD = 1.0     # 梯度损失权重最高
+STAGE3_LAMBDA_L1_BASE = 0.5   # L1正则化最高
 STAGE3_DESCRIPTION = "精细调整阶段"
 
 # ============================================================================
@@ -111,8 +111,8 @@ ENABLE_NORMALIZATION = True
 # ============================================================================
 
 # 早停机制参数
-ENABLE_EARLY_STOPPING = False
-EARLY_STOP_PATIENCE = 30      # 如果R2在30个epoch内无改善则停止
+ENABLE_EARLY_STOPPING = True
+EARLY_STOP_PATIENCE = 20      # 如果R2在30个epoch内无改善则停止
 EARLY_STOP_MIN_DELTA = 1e-5   # 最小改善阈值
 
 # ============================================================================

@@ -9,6 +9,28 @@ Reference:
 import torch
 import torch.nn as nn
 
+# ========================================================
+# [新增] 空间注意力模块：用于聚焦 T 型管道的高梯度/流场突变区域
+# ========================================================
+class SpatialAttention(nn.Module):
+    """提取空间关键特征的注意力机制"""
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        padding = kernel_size // 2
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # 在通道维度上进行最大池化和平均池化
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x_cat = torch.cat([avg_out, max_out], dim=1)
+        # 生成空间注意力权重图 (0~1之间)
+        attn_map = self.sigmoid(self.conv(x_cat))
+        # 将权重施加回原特征图
+        return x * attn_map
+# ========================================================
+
 
 class _DenseLayer(nn.Sequential):
     """One dense layer within dense block, with bottleneck design.
@@ -17,8 +39,7 @@ class _DenseLayer(nn.Sequential):
         in_features (int):
         growth_rate (int): # out feature maps of every dense layer
         drop_rate (float): 
-        bn_size (int): Specifies maximum # features is `bn_size` * 
-            `growth_rate`
+        bn_size (int): Specifies maximum # features is `bn_size` * `growth_rate`
         bottleneck (bool, False): If True, enable bottleneck design
     """
     def __init__(self, in_features, growth_rate, drop_rate=0., bn_size=8,
@@ -63,13 +84,6 @@ class _Transition(nn.Sequential):
         """Transition layer, either downsampling or upsampling, both reduce
         number of feature maps, i.e. `out_features` should be less than 
         `in_features`.
-
-        Args:
-            in_features (int):
-            out_features (int):
-            down (bool): If True, downsampling, else upsampling
-            bottleneck (bool, True): If True, enable bottleneck design
-            drop_rate (float, 0.):
         """
         super(_Transition, self).__init__()
         self.add_module('norm1', nn.BatchNorm2d(in_features))
@@ -159,29 +173,6 @@ class DenseED(nn.Module):
     def __init__(self, in_channels, out_channels, blocks, growth_rate=16,
                  init_features=48, bn_size=8, drop_rate=0, bottleneck=False,
                  out_activation=None):
-        """Dense Convolutional Encoder-Decoder Networks.
-
-        In the network presented in the paper, the last decoding layer 
-        (transition up) directly outputs the predicted fields. 
-
-        The network parameters should be modified for different image size,
-        mostly the first conv and the last convT layers. (`output_padding` in
-        ConvT can be modified as well)
-
-        Args:
-            in_channels (int): number of input channels (also include time if
-                time enters in the input)
-            out_channels (int): number of output channels
-            blocks (list-like): A list (of odd size) of integers
-            growth_rate (int): K
-            init_features (int): the number of feature maps after the first
-                conv layer
-            bn_size: bottleneck size for number of feature maps
-            bottleneck (bool): use bottleneck for dense block or not
-            drop_rate (float): dropout rate
-            out_activation: Output activation function, choices=[None, 'tanh',
-                'sigmoid', 'softplus']
-        """
         super(DenseED, self).__init__()
         if len(blocks) > 1 and len(blocks) % 2 == 0:
             raise ValueError('length of blocks must be an odd number, but got {}'
@@ -192,12 +183,9 @@ class DenseED(nn.Module):
         self.features = nn.Sequential()
 
         # First convolution, half image size ================
-        # For even image size: k7s2p3, k5s2p2
-        # For odd image size (e.g. 65): k7s2p2, k5s2p1, k13s2p5, k11s2p4, k9s2p3
         self.features.add_module('In_conv', nn.Conv2d(in_channels, init_features, 
                               kernel_size=7, stride=2, padding=2, bias=False))
         # Encoding / transition down ================
-        # dense block --> encoding --> dense block --> encoding
         num_features = init_features
         for i, num_layers in enumerate(enc_block_layers):
             block = _DenseBlock(num_layers=num_layers,
@@ -215,8 +203,8 @@ class DenseED(nn.Module):
                                      drop_rate=drop_rate)
             self.features.add_module('TransDown%d' % (i + 1), trans_down)
             num_features = num_features // 2
+            
         # Decoding / transition up ==============
-        # dense block --> decoding --> dense block --> decoding --> dense block
         for i, num_layers in enumerate(dec_block_layers):
             block = _DenseBlock(num_layers=num_layers,
                                 in_features=num_features,
@@ -235,11 +223,17 @@ class DenseED(nn.Module):
                 self.features.add_module('TransUp%d' % (i + 1), trans_up)
                 num_features = num_features // 2
         
+        # ===============================================================
+        # [新增] 在深层特征图映射到最后物理场输出前，无缝插入空间注意力层！
+        self.features.add_module('SpatialAttention', SpatialAttention(kernel_size=7))
+        # ===============================================================
+
         # The last decoding layer =======
         last_trans_up = last_decoding(num_features, out_channels, 
                             kernel_size=4, stride=2, padding=1, 
                             output_padding=1, bias=False, drop_rate=drop_rate)
         self.features.add_module('LastTransUp', last_trans_up)
+        
         if out_activation is not None:
             self.features.add_module(out_activation, activation(out_activation))
         
@@ -287,7 +281,6 @@ class DenseED(nn.Module):
 
 
 if __name__ == '__main__':
-
     dense_ed = DenseED(1, 3, blocks=(3, 6, 3), growth_rate=16, 
                       init_features=48, drop_rate=0, bn_size=8, 
                       bottleneck=False, out_activation='Tanh')
