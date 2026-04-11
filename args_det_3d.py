@@ -58,12 +58,7 @@ class Parser(argparse.ArgumentParser):
     def parse(self):
         args = self.parse_args()
         
-        args.run_dir = args.exp_dir + '/' + args.exp_name \
-            + '/kle{}/ntrain{}_blocks{}_growth{}_nif{}_drop{}_batch{}_lr{}_wd{}_epochs{}'.format(
-                args.kle, args.ntrain, args.blocks, args.growth_rate,
-                args.init_features, args.drop_rate, args.batch_size, 
-                args.lr, args.weight_decay, args.epochs
-            )
+        args.run_dir = args.exp_dir + '/' + args.exp_name
         args.ckpt_dir = args.run_dir + '/checkpoints'
         mkdirs([args.run_dir, args.ckpt_dir])
 

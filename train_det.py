@@ -194,6 +194,9 @@ def test(epoch):#epoch is a number
                 print('epoch {}: plotting prediction {}'.format(epoch, i))
                 plot_prediction_det(args.pred_dir, samples_target[i], 
                     samples_output[i], epoch, i, plot_fn=args.plot_fn)
+            
+            del samples_output, samples_target, idx
+            torch.cuda.empty_cache()
 
     rmse_test = np.sqrt(mse / max(n_out_pixels_test, 1.0))
     ss_tot = masked_sum_y2 - (masked_sum_y ** 2) / max(n_out_pixels_test, 1.0)
@@ -203,6 +206,10 @@ def test(epoch):#epoch is a number
     if epoch % args.log_freq == 0:
         logger['r2_test'].append(r2_score)
         logger['rmse_test'].append(rmse_test)
+        
+    try: del input, target, output, t_mask, masked_output, masked_target
+    except: pass
+    torch.cuda.empty_cache()
 
 # Import the PINN combined loss from utils.physics_loss
 from utils.physics_loss import combined_physics_loss
@@ -253,6 +260,10 @@ def train(epoch):
     # save model
     if epoch % args.ckpt_freq == 0:
         torch.save(model.state_dict(), args.ckpt_dir + "/model_epoch{}.pth".format(epoch))
+        
+    try: del input, target, output, loss, loss_dict, t_mask, masked_output, masked_target
+    except: pass
+    torch.cuda.empty_cache()
 
 
 print('Start training........................................................')
