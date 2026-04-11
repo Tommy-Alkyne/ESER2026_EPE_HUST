@@ -81,8 +81,27 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
     elif y_data.ndim != 5:
         raise ValueError("Unsupported output ndim {}".format(y_data.ndim))
 
+    # ==========================================
+    # [新增] 计算各物理通道的全局最大最小值 (3D)
+    # y_data 此时 shape 固定为 (N, C, D, H, W)
+    # ==========================================
+    y_min = np.min(y_data, axis=(0, 2, 3, 4)) # Shape: (C,)
+    y_max = np.max(y_data, axis=(0, 2, 3, 4)) # Shape: (C,)
+    
     x_tensor = torch.tensor(x_data, dtype=torch.float32)
     y_tensor = torch.tensor(y_data, dtype=torch.float32)
+
+    # ==========================================
+    # [新增] 对 Target 进行严格的 Min-Max 归一化 -> [0, 1]
+    # ==========================================
+    # 扩展维度以匹配 5D Tensor广播机制：(1, C, 1, 1, 1)
+    y_min_t = torch.tensor(y_min, dtype=torch.float32).view(1, -1, 1, 1, 1)
+    y_max_t = torch.tensor(y_max, dtype=torch.float32).view(1, -1, 1, 1, 1)
+    
+    # 归一化公式: (y - min) / (max - min)
+    y_tensor = (y_tensor - y_min_t) / (y_max_t - y_min_t + 1e-8)
+    # 防止极微小越界，硬截断到 0-1
+    y_tensor = torch.clamp(y_tensor, 0.0, 1.0)
 
     if align_input_to_output:
         _, _, d_out, h_out, w_out = y_tensor.shape
@@ -101,21 +120,27 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
     dataset = TensorDataset(x_tensor, y_tensor)
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuff, **kwargs)
 
-    # simple statistics of output data
+    # simple statistics of output data (基于原数据计算，或者可调)
     y_data_mean = np.mean(y_data, 0)
     y_data_var = np.sum((y_data - y_data_mean) ** 2)
     stats = {}
     stats['y_mean'] = y_data_mean
     stats['y_var'] = y_data_var
+    
+    # ==========================================
+    # [新增] 导出极值供其它流程（如物理损失、后处理还原）使用
+    # ==========================================
+    stats['y_min'] = y_min
+    stats['y_max'] = y_max
 
     return data_loader, stats
 
 if __name__ == "__main__":
     dir = '/home/tommy/code/ESER2026_EPE_HUST/dataset/p_c10e6_128.hdf5'
     size = 16
-    data_loader,stats = load_data(dir,size)
+    data_loader, stats = load_data(dir, size)
     print("\n统计信息:")
     print(f"y_mean 形状: {stats['y_mean'].shape}")
-    #print(f"y_mean 前5个值: {stats['y_mean'][:5]}")
     print(f"y_var 值: {stats['y_var']}")
-    #print(stats)
+    print(f"y_min 值: {stats['y_min']}")
+    print(f"y_max 值: {stats['y_max']}")

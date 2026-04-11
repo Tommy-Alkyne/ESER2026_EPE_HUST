@@ -5,6 +5,29 @@ Dense Convolutional Encoder-Decoder Networks (3D variant)
 import torch
 import torch.nn as nn
 
+# ========================================================
+# [新增] 3D 空间注意力模块：用于聚焦 T 型管道的高梯度/流场突变区域
+# ========================================================
+class SpatialAttention3D(nn.Module):
+    """提取空间关键特征的注意力机制(3D)"""
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention3D, self).__init__()
+        padding = kernel_size // 2
+        # 注意这里使用的是 Conv3d
+        self.conv = nn.Conv3d(2, 1, kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # 在通道维度(dim=1)上进行最大池化和平均池化
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x_cat = torch.cat([avg_out, max_out], dim=1)
+        # 生成空间注意力权重图 (0~1之间)
+        attn_map = self.sigmoid(self.conv(x_cat))
+        # 将权重施加回原特征图
+        return x * attn_map
+# ========================================================
+
 class _DenseLayer3D(nn.Sequential):
     def __init__(self, in_features, growth_rate, drop_rate=0., bn_size=8,
                  bottleneck=False):
@@ -174,6 +197,11 @@ class DenseED3D(nn.Module):
             self.dec_blocks.append(block)
             num_features = in_features + num_layers * growth_rate
 
+        # ===============================================================
+        # [新增] 在深层特征图映射到最后物理场输出前，无缝插入空间注意力层！
+        self.spatial_attention = SpatialAttention3D(kernel_size=7)
+        # ===============================================================
+
         self.last_trans_up = last_decoding(num_features, out_channels,
                             kernel_size=(1,4,4), stride=(1,2,2), padding=(0,1,1),
                             output_padding=(0,1,1), bias=False, drop_rate=drop_rate)
@@ -214,6 +242,11 @@ class DenseED3D(nn.Module):
                     )
                 x = torch.cat([x, skip], dim=1)
             x = dec_block(x)
+
+        # ===============================================================
+        # [新增] 施加空间注意力
+        x = self.spatial_attention(x)
+        # ===============================================================
 
         x = self.last_trans_up(x)
         if self.out_activation is not None:

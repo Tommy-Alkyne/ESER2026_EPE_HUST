@@ -204,6 +204,9 @@ def test(epoch):#epoch is a number
         logger['r2_test'].append(r2_score)
         logger['rmse_test'].append(rmse_test)
 
+# Import the PINN combined loss from utils.physics_loss
+from utils.physics_loss import combined_physics_loss
+
 def train(epoch):
     model.train()
     mse = 0.
@@ -216,11 +219,23 @@ def train(epoch):
         output = model(input)
         t_mask = build_t_mask(output)
         t_mask = t_mask.expand(output.shape[0], output.shape[1], *output.shape[2:])
-        masked_output = output * t_mask
-        masked_target = target * t_mask
-        loss = F.l1_loss(masked_output, masked_target, reduction='sum')
+        
+        # Apply combined physics loss instead of pure L1 loss
+        loss, loss_dict = combined_physics_loss(
+            output, target, 
+            mask=t_mask, 
+            epoch=epoch, 
+            total_epochs=args.epochs,
+            div_weight=0.1,
+            ns_weight=0.01,
+            smooth_weight=0.01
+        )
+        
         loss.backward()
         optimizer.step()
+        
+        masked_output = output * t_mask
+        masked_target = target * t_mask
         mse += F.mse_loss(masked_output, masked_target, reduction='sum').item()
         n_out_pixels_train += t_mask.sum().item()
         masked_sum_y += masked_target.sum().item()
@@ -230,7 +245,8 @@ def train(epoch):
     scheduler.step(rmse)
     ss_tot = masked_sum_y2 - (masked_sum_y ** 2) / max(n_out_pixels_train, 1.0)
     r2_score = 1 - mse / max(ss_tot, 1e-12)
-    print("epoch: {}, training r2-score: {:.6f}".format(epoch, r2_score))
+    print("epoch: {}, training r2: {:.6f}, base_loss: {:.4f}, div_loss: {:.6f}, ns_loss: {:.6f}".format(
+        epoch, r2_score, loss_dict['base'], loss_dict['div'], loss_dict['ns']))
     if epoch % args.log_freq == 0:
         logger['r2_train'].append(r2_score)
         logger['rmse_train'].append(rmse)
