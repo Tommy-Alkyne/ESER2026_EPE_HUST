@@ -6,24 +6,29 @@ import torch
 import torch.nn.functional as F
 
 
+def get_diff_kernels(device):
+    """生成用于计算有限差分的固定卷积核"""
+    kernel_x = torch.tensor([[0, 0, 0], [-0.5, 0, 0.5], [0, 0, 0]], dtype=torch.float32).view(1, 1, 3, 3).to(device)
+    kernel_y = torch.tensor([[0, -0.5, 0], [0, 0, 0], [0, 0.5, 0]], dtype=torch.float32).view(1, 1, 3, 3).to(device)
+    return kernel_x, kernel_y
+
+
+
 def compute_divergence(velocity_field):
-    """
-    计算速度场的散度（连续性方程约束）
-    velocity_field: (B, 2, H, W) - 假设通道0是vx，通道1是vy
-    """
+    """使用F.conv2d向量化计算散度，padding=1保留边界信息"""
     if velocity_field.shape[1] < 2:
         return None
-    
+        
     vx = velocity_field[:, 0:1, :, :]
     vy = velocity_field[:, 1:2, :, :]
     
-    # 中心差分计算梯度
-    dvx_dx = (vx[:, :, :, 2:] - vx[:, :, :, :-2]) / 2.0
-    dvy_dy = (vy[:, :, 2:, :] - vy[:, :, :-2, :]) / 2.0
+    kernel_x, kernel_y = get_diff_kernels(velocity_field.device)
     
-    # 对齐尺寸
-    divergence = dvx_dx[:, :, 1:-1, :] + dvy_dy[:, :, :, 1:-1]
-    return divergence
+    # padding=1 避免了原版尺寸缩小的问题
+    dvx_dx = F.conv2d(vx, kernel_x, padding=1)
+    dvy_dy = F.conv2d(vy, kernel_y, padding=1)
+    
+    return dvx_dx + dvy_dy
 
 
 def divergence_loss(output, target_divergence_penalty=1.0):
@@ -43,12 +48,16 @@ def divergence_loss(output, target_divergence_penalty=1.0):
 
 
 def smoothness_loss(tensor, weight=1.0):
-    """
-    平滑性正则化：鼓励相邻像素的变化平缓（减少噪声）
-    """
-    # 计算一阶导数的范数
-    dx = tensor[:, :, :, 1:] - tensor[:, :, :, :-1]
-    dy = tensor[:, :, 1:, :] - tensor[:, :, :-1, :]
+    """向量化的平滑度损失"""
+    kernel_x, kernel_y = get_diff_kernels(tensor.device)
+    
+    # 分组卷积以处理多通道(如P, Vx, Vy)
+    channels = tensor.shape[1]
+    kernel_x_group = kernel_x.repeat(channels, 1, 1, 1)
+    kernel_y_group = kernel_y.repeat(channels, 1, 1, 1)
+    
+    dx = F.conv2d(tensor, kernel_x_group, padding=1, groups=channels)
+    dy = F.conv2d(tensor, kernel_y_group, padding=1, groups=channels)
     
     smoothness = torch.mean(torch.abs(dx)) + torch.mean(torch.abs(dy))
     return smoothness * weight

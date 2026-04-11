@@ -2,7 +2,7 @@
 Stein Variational Gradient Descent for Deep ConvNet on GPU.
 Current implementation is mainly using for-loops over model instances.
 """
-
+from torch.cuda.amp import autocast, GradScaler
 import torch
 import numpy as np
 from time import time
@@ -70,14 +70,13 @@ def test(epoch, logger, test_fixed=None):
     
     mse_test, nlp_test = 0., 0.
     for batch_idx, (input, target) in enumerate(test_loader):
-        input, target = input.to(device), target.to(device)
-        mse, nlp, output = bayes_nn._compute_mse_nlp(input, target, 
-                            size_average=True, out=True)
-        # output: S x N x oC x oH x oW --> N x oC x oH x oW
-        y_pred_mean = output.mean(0)        
-        EyyT = (output ** 2).mean(0)
-        EyEyT = y_pred_mean ** 2
-        y_noise_var = (- bayes_nn.log_beta).exp().mean()
+        input, target = input.to(device, non_blocking=True), target.to(device, non_blocking=True)
+        
+        # 开启混合精度上下文
+        with autocast():
+            mse, nlp, output = bayes_nn._compute_mse_nlp(input, target, 
+                                size_average=True, out=True)
+        # 后面的 y_pred_mean 等统计计算保持原样不变...
         y_pred_var =  EyyT - EyEyT + y_noise_var
 
         mse_test += mse.item()

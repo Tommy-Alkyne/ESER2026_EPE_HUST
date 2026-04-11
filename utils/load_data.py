@@ -2,112 +2,73 @@ import torch
 import numpy as np
 import h5py
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import Dataset, DataLoader
 
-
-def load_data(data_dir, batch_size):
-    """Return data loader
-
-    Args:
-        data_dir: directory to hdf5 file, e.g. `dir/to/kle4225_lhs256.hdf5`
-        batch_size (int): mini-batch size for loading data
-
-    Returns:
-        (data_loader (torch.utils.data.DataLoader), stats)
-    """
-
-    with h5py.File(data_dir, 'r') as f:
-        # 优先使用sensor_input（通常是更好的输入），如果没有则用input
-        if 'sensor_input' in f:
-            x_data = f['sensor_input'][()]
-            print("[INFO] Using 'sensor_input' as input (shape: {})".format(f['sensor_input'].shape))
-        else:
-            x_data = f['input'][()]
-            print("[INFO] Using 'input' as input (shape: {})".format(f['input'].shape))
+class CFDHDF5Dataset(Dataset):
+    def __init__(self, data_dir, min_spatial_size=7):
+        self.data_dir = data_dir
+        self.min_spatial_size = min_spatial_size
         
-        y_data = f['output'][()]
+        # 初始化时仅读取元数据，不加载张量
+        with h5py.File(data_dir, 'r') as f:
+            self.input_key = 'sensor_input' if 'sensor_input' in f else 'input'
+            self.n_samples = f[self.input_key].shape[0]
+            
+            # 预计算统计信息 (为了性能，仅使用前1000个样本估算方差)
+            sample_size = min(1000, self.n_samples)
+            y_subset = f['output'][:sample_size]
+            self.y_mean = np.mean(y_subset, axis=0)
+            self.y_var = np.sum((y_subset - self.y_mean) ** 2) * (self.n_samples / sample_size)
 
-    print("output data shape (原始): {}".format(y_data.shape))
-    print("input data shape (原始): {}".format(x_data.shape))
-    
-    # 处理输入数据的形状
-    # 如果输入是2D (N, features)，需要重塑为4D (N, C, H, W)
-    if x_data.ndim == 2:
-        # 对于(N, features)，尝试重塑为合理的(N, C, H, W)
-        n_samples = x_data.shape[0]
-        features = x_data.shape[1]
-        # 将features分解为H和W（优先找接近的平方根）
-        h = int(np.sqrt(features))
-        w = features // h
-        if h * w == features:
-            x_data = x_data.reshape(n_samples, 1, h, w)
-            print(f"[INFO] Reshaped input from (N, {features}) to {x_data.shape}")
-        else:
-            # 无法完美分解，尝试(N, 1, 1, features)
-            x_data = x_data.reshape(n_samples, 1, 1, features)
-            print(f"[INFO] Reshaped input to (N, 1, 1, features): {x_data.shape}")
-    elif x_data.ndim == 3:
-        # (N, H, W) -> (N, 1, H, W)
-        # sensor_input 通常是(N, H, W)，需要补通道维
-        n_samples, h, w = x_data.shape
-        x_data = x_data.reshape(n_samples, 1, h, w)
-        print(f"[INFO] Expanded input from (N, H, W) to (N, C, H, W): {x_data.shape}")
-    
-    # 处理输出数据的形状
-    # 如果输出是5D (N, C, 1, H, W) 且深度维为1，挤压掉深度维变成4D
-    if y_data.ndim == 5 and y_data.shape[2] == 1:
-        y_data = np.squeeze(y_data, axis=2)
-        print(f"[INFO] Squeezed output from 5D to 4D (removed depth dim): {y_data.shape}")
-    
-    output_h, output_w = y_data.shape[-2:]
-    print(f"[INFO] Target output spatial size: {output_h}x{output_w}")
-    
-    # 如果输入空间大小太小，通过双线性插值放大到匹配输出大小或至少7x7
-    min_spatial_size = 7  # 模型第一层需要至少7x7
-    if x_data.ndim == 4:
-        _, c, h, w = x_data.shape
-        target_h = max(output_h, min_spatial_size)
-        target_w = max(output_w, min_spatial_size)
+    def __len__(self):
+        return self.n_samples
+
+    def __getitem__(self, idx):
+        # 运行时按需动态读取
+        with h5py.File(self.data_dir, 'r') as f:
+            x_data = f[self.input_key][idx]
+            y_data = f['output'][idx]
+            
+        x_tensor = torch.tensor(x_data, dtype=torch.float32)
+        y_tensor = torch.tensor(y_data, dtype=torch.float32)
+
+        # 输入维度处理：补齐通道维 (H, W) -> (1, H, W)
+        if x_tensor.ndim == 2:
+            x_tensor = x_tensor.unsqueeze(0)
+            
+        # 输出维度处理：如果是 (C, 1, H, W) 则挤压掉深度维
+        if y_tensor.ndim == 4 and y_tensor.shape[1] == 1:
+            y_tensor = y_tensor.squeeze(1)
+
+        # 空间插值放大 (针对输入特征图过小的情况)
+        _, h, w = x_tensor.shape
+        target_h = max(y_tensor.shape[-2], self.min_spatial_size)
+        target_w = max(y_tensor.shape[-1], self.min_spatial_size)
         
         if h < target_h or w < target_w:
-            x_tensor = torch.tensor(x_data, dtype=torch.float32)
-            x_upsampled = F.interpolate(
-                x_tensor, 
+            x_tensor = F.interpolate(
+                x_tensor.unsqueeze(0), 
                 size=(target_h, target_w), 
                 mode='bilinear', 
                 align_corners=False
-            )
-            x_data = x_upsampled.numpy()
-            print(f"[INFO] Upsampled input from ({h}x{w}) to ({target_h}x{target_w})")
+            ).squeeze(0)
 
-    print(f"input data shape (处理后): {x_data.shape}")
-    print(f"output data shape (处理后): {y_data.shape}")
+        return x_tensor, y_tensor
 
-    kwargs = {'num_workers': 4,
-              'pin_memory': True} if torch.cuda.is_available() else {}
-
-    # 转换为torch张量并转换数据类型为float32
-    x_tensor = torch.tensor(x_data, dtype=torch.float32)
-    y_tensor = torch.tensor(y_data, dtype=torch.float32)
+def load_data(data_dir, batch_size):
+    """优化后的数据加载器：Lazy Loading + GPU预取支持"""
+    dataset = CFDHDF5Dataset(data_dir)
     
-    dataset = TensorDataset(x_tensor, y_tensor)
+    kwargs = {
+        'num_workers': 4,
+        'pin_memory': True,
+        'prefetch_factor': 2  # 加速数据向GPU的输送
+    } if torch.cuda.is_available() else {}
+
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, **kwargs)
-
-    # simple statistics of output data
-    y_data_mean = np.mean(y_data, 0)
-    y_data_var = np.sum((y_data - y_data_mean) ** 2)
-    stats = {}
-    stats['y_mean'] = y_data_mean
-    stats['y_var'] = y_data_var
-
+    
+    stats = {
+        'y_mean': dataset.y_mean,
+        'y_var': dataset.y_var
+    }
     return data_loader, stats
-
-if __name__ == "__main__":
-    dir = '/home/tommy/code/ESER2026_EPE_HUST/dataset/kle4225_lhs1024.hdf5'
-    size = 16
-    data_loader,stats = load_data(dir,size)
-    print("\n统计信息:")
-    print(f"y_mean 形状: {stats['y_mean'].shape}")
-    #print(f"y_mean 前5个值: {stats['y_mean'][:5]}")
-    print(f"y_var 值: {stats['y_var']}")
-    #print(stats)
