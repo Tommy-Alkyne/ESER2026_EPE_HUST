@@ -1,171 +1,82 @@
-# README 中文更新
+# 基于物理信息的 T 型管流场深度学习代理模型
+(Physics-Informed T-Pipe Fluid Surrogate Model)
 
-## Prediction 预测
-用来指定模型.pth文件和数据.hdf5文件来预测的脚本. 使用的是`surrogate_predict.py`.
-### 参数
---ckpt-file 使用的模型pth文件的路径 例: `--ckpt-file './experiments/2dtest_1024/kle4225/ntrain1024_blocks[3, 6, 3]_growth16_nif48_drop0.0_batch16_lr0.003_wd0.0005_epochs150/checkpoints/model_epoch100.pth'` 注意, 如果路径中有中括号`[`等特殊字符需要用单引号`'`把文件路径括起来. 会有中括号是因为默认的保存命名方式如此
+本项目是一个专门针对**T型管道内不可压缩流体**（压力场与速度场）预测定制的深度学习代理模型框架。
+模型基于 **Dense Encoder-Decoder (DenseED)** 构建，并深度融合了 **物理信息神经网络 (PINN)** 约束，在保证超高预测精度（$R^2 > 0.93$）的同时，严格遵守了质量守恒与动量守恒等宏观物理定理。
 
---data-file 用来预测的hd5文件的路径 例: `--data-file './dataset/kle4225_lhs1024.hdf5'` 
+---
 
---ndim 选择3D还是2D, 如果留空会自动检测 例: `--ndim 2`
+## 一、 核心技术特性
 
---out-file 指定的输出文件的路径 例: `--out-file ./dataset/prediction/2d_epoch100_1024.hdf5` 如果dataset文件夹里没有prediction文件夹需要提前创建
+- **空间注意力机制 (Spatial Attention)**：针对T型管交叉口处的剧烈梯度变化，在解码器末端引入空间注意力，精准捕获激波与回流等流场细节。
+- **物理偏微分方程约束 (PINN)**：突破纯数据驱动的均方误差 (MSE) 限制，基于高阶平滑激活函数 (SiLU) 引入自适应物理损失：
+  - **连续性方程约束**：最小化散度 ($\nabla \cdot v=0$)，保证预测流场的不可压缩特性。
+  - **Navier-Stokes动量约束**：通过自动微分与有限差分法，引导预测结果严格符合稳态动量守恒方程。
+- **严格的计算边界掩码 (T-Mask)**：内置定制的 T型几何域切割器，所有的特征提取、物理损失检查与最后梯度回传，均被严格限制在真实管壁内部，彻底消除管外无边界区域的误差污染。
 
-其他的参数可以通过`python3 surrogate_predict.py --help`查看
-### 例子
+---
 
+## 二、 项目核心结构说明
+
+```text
+.
+├── dataset/                # 数据集目录 (存放训练/测试用的 HDF5 流场格式数据)
+├── experiments/            # 模型输出目录 (训练日志、模型权重 .pth、可视化验证 .pdf 等自动归档)
+├── models/                 # 模型架构定义
+│   ├── dense_ed.py         # 包含空间注意力与 SiLU 激活的核心 DenseED 代理模型
+│   └── dense_ed_3d.py      # 对应的 3D 体素代理模型拓展版本
+├── utils/                  # 辅助执行模块
+│   ├── physics_loss.py     # 核心物理损失模块 (包含散度、NS方程残差的有限差分计算逻辑)
+│   ├── plot.py             # 自动出图脚本 (强制对齐真实值与误差值的色彩分布极值)
+│   └── load_data.py        # HDF5 流体数据的数据集加载与批次拆分
+├── train_det.py            # 主干训练脚本 (管理前向传播、联合物理损失后向计算与学习率调度)
+├── surrogate_predict.py    # 脱机推理脚本 (用于加载已训好的模型对新设计进行单张快推)
+├── diagnose.py             # 智能诊断工具 (评估模型 R²、RMSE 并给出建议方案)
+├── gui_trainer.py          # 图形化训练面板 (Tkinter UI)
+└── args_det.py             # 常规代理模型的超参数统一定义表
+```
+
+---
+
+## 三、 标准工作流程 / Workflow
+
+### 1. 环境准备
+请确保您的 Python 运行环境中已经安装了以下科学计算和深度学习依赖：
 ```bash
-python3 surrogate_predict.py --ckpt-file './experiments/2dtest_1024/kle4225/ntrain1024_blocks[3, 6, 3]_growth16_nif48_drop0.0_batch16_lr0.003_wd0.0005_epochs150/checkpoints/model_epoch100.pth' --data-file './dataset/kle4225_lhs1024.hdf5' --ndim 2 --out-file ./dataset/prediction/2d_epoch100_1024.hdf5
+pip install torch numpy h5py matplotlib
 ```
-## Train 训练
-训练用来生成.pth的模型文件. 使用的是`train_det.py`和`train_svgd.py`
-### 参数
---exp-name 训练实验的名字 例: `--exp-name 2dtest_1024` 会在experiments文件夹下生成一个2dtest_1024的文件夹用来保存训练结果
+*(提示: 若要使用 GUI 图形化操作面板，请确保当前 Python 环境支持 `tkinter`)*
 
---kle 选择KLE50, KLE500, KLE4225数据集 例: `--kle 4225` 对于作者给出的数据集, 只有4225. 后面可能会改命名规范, 可能会改
+### 2. 数据入库
+将预先生成的 CFD 模拟数据集 (HDF5 格式) 拷贝至项目的 `dataset/` 路径下。
+> 示例：`dataset/p_v_256.hdf5`
 
---ntrain 选择训练数据的数量 例: `--ntrain 1024` 就是hdf5里4225后面那个数
+### 3. 启动训练
+项目提供两种模式的训练启动入口。模型在启动后会在 `experiments/` 目录下自动创建一个带数字编号的专属文件夹存放它所有的过程记录。
 
---ndim 选择3D还是2D 如果留空默认2D. 例: `--ndim 3`
-
---epochs 训练的轮数 例: `--epochs 150`
-
---ckpt-freq 多久保存一次模型 例: `--ckpt-freq 50` 就是每50轮保存一次
-
---plot-freq 多久保存一次画预测图的曲线 例: `--plot-freq 50` 就是每50轮保存一次
-
---train-file 指定训练数据的hdf5文件路径 例: `--train-file './dataset/10243d.hdf5'` **注意: 如果使用此参数会覆盖--kle 和--ntrain 对训练数据的选择. 如果不使用此参数则默认选择--kle 和--ntrain所指定的数据**
-
---test-file 指定测试数据的hdf5文件路径 例: `--test-file './dataset/10243d.hdf5'` **注意: 如果使用此参数会覆盖默认的测试数据. 如果不使用此参数则默认选择--kle 和--ntrain所指定的数据**
-
-其他的参数可以通过`python3 train_det.py --help`查看
-
-### 例子
-**2D情况**
+**方案 A：使用图形化界面 (适合参数调试)**
+运行以下命令调出面板：
 ```bash
- python3 train_det.py --exp-name 2dtest_1024 --epochs 150 --ckpt-freq 50 --plot-freq 50 --ntrain 1024
+python gui_trainer.py
 ```
-这个例子表示使用1024个训练数据 (选择kle4225_lhs1024.hdf5 作为训练数据), 训练150轮, 每50轮保存一次模型和画图. 结果会保存在`./experiments/2dtest_1024/`文件夹下. 没有指定--kle和--ndim, 默认是4225和2D
+在界面中浏览并选中数据集，设置好目标 Epochs（推荐设定为 200）和 Batch Size 后，点击“开始训练”。
 
-**3D例子**
+**方案 B：使用命令行 (适合批处理与服务器挂机)**
+通过 CLI 指定文件直接开始基于 PINN 约束的循环优化：
 ```bash
- python3 train_det.py --exp-name 3dtest_1024 --ndim 3 --epochs 150 --ckpt-freq 50 --plot-freq 50 --train-file './dataset/10243d.hdf5' --test-file './dataset/10243d.hdf5'
-```
-这个例子表示使用1024个训练数据 (选择`10243d.hdf5` 作为训练数据), 训练150轮, 每50轮保存一次模型和画图. 结果会保存在`./experiments/3dtest_1024/`文件夹下
-
-# 原README
-KLE4225 (No dim reduction) | KLE500 | KLE50
-:-----:|:------:|:-----:
-![](images/kle4225_pred_at_x_312_n512.png?raw=true) | ![](images/kle500_pred_at_x_293_n256.png?raw=true) | ![](images/kle50_pred_at_x_47_n128.png?raw=true)
-
-The three columns in each image correspond to three output fields:
-(1) pressure field, (2)(3) velocities field in x and y axies.
-The four rows in each image from top to bottom show: (1) simulator output, 
-(2) surrogate prediction (predictive mean), (3) error between simulator and prediction, 
-(4) two standard devivation of prediction. 
-
-## Dependencies
-- python 3 or 2
-- PyTorch 0.4
-- h5py
-- matplotlib
-- seaborn
-
-
-## Installation
-- Install PyTorch and other dependencies
-
-- Clone this repo:
-```
-git clone https://github.com/cics-nd/cnn-surrogate.git
-cd cnn-surrogate
+python train_det.py --train-file p_v_256.hdf5 --test-file p_v_256.hdf5
 ```
 
-## Dataset
-Download Darcy flow simulation dataset with input Gaussian random field (with 
-exponential kernel) and three output fields (pressure and velocities fields).
-
-Download KLE4225 dataset:
+### 4. 训练监测诊断
+当训练进程结束后，或中途按 `Ctrl+C` 中止后，可通过本项目提供的专用智能诊断器进行数据体检：
 ```bash
-bash ./scripts/download_dataset.sh 4225
+python diagnose.py
 ```
-Change 4225 to 500, 50 to download KLE500, KLE50 datasets. 
-Data is saved at `./dataset/`.
+该工具有两项核心功能：
+- 自动抓取最新的训练目录并解析日志。
+- 输出带有阈值判定的中文评价报告 (包括 $R^2$ 得分、RMSE 误差评估) 并给出针对性调优建议。
 
-Number of training data within each dataset:
-* KLE50: [32, 64, 128, 256],
-* KLE500: [64, 128, 256, 512],
-* KLE4225: [128, 256, 512, 1024].
-
-Number of test data: 500.
-Number of Monte Carlo sampling data: 10,000.
-
-KLE4225 | KLE500 | KLE50
-:-----:|:------:|:-----:
-![](images/kle4225_data_312.png?raw=true) | ![](images/kle500_data_293.png?raw=true) | ![](images/kle50_data_47.png?raw=true)
-
-
-## Start with a Pre-trained Model
-
-Download a pre-trained model:
-```bash
-bash ./scripts/download_checkpoints.sh 4225 256
-```
-where 4225 and 256 refer to the intrinsic input dimensionality of dataset and
-number of training data. The pre-trained model is downloaded to the same location (`./experiments/Bayesian/*/`) as if it was trained on local machines. You may proceed to use the pre-trained model for UQ tasks.
-
-## Uncertainty Quantification (UQ)
-Perform UQ tasks, including:
-
-- Prediction at one input realization
-- Uncertainty propagation
-- Distribution estimate
-- Uncertainty quality assessment (realiability diagram)
-```
-python post_proc.py --post --kle 4225 --ntrain 256
-```
-Do not forget to add the `--post` switch. For KLE4225 with 128 data, `--epochs` should be set to 400 to show convergence.
-
-
-## Training
-
-### Deterministic Surrogate 
-
-Train a non-Bayesian surroagte (e.g. with 256 data from KLE4225 dataset):
-```
-python train_det.py --kle 4225 --ntrain 256
-```
-The runs are saved at `./experiments/deterministic`.
-
-### Bayesian Surrogate
-Train a Bayesian surrogate (e.g. with 256 data from KLE4225 dataset
-using SVGD with 20 samples):
-```
-python train_svgd.py --kle 4225 --ntrain 256 --n-samples 20
-```
-The runs are saved at `./experiments/Bayesian`.
-It takes 1-2 hours to train a Bayesian surrogate with 256-512 training data 
-(20 samples, 300 epochs, batch-size 16) on a single GPU.
-
-## Citation
-
-If you find this repo useful for your research, please consider to cite:
-```latex
-@article{ZHU2018415,
-title = "Bayesian deep convolutional encoder–decoder networks for surrogate modeling and uncertainty quantification",
-journal = "Journal of Computational Physics",
-volume = "366",
-pages = "415 - 447",
-year = "2018",
-issn = "0021-9991",
-doi = "https://doi.org/10.1016/j.jcp.2018.04.018",
-url = "http://www.sciencedirect.com/science/article/pii/S0021999118302341",
-author = "Yinhao Zhu and Nicholas Zabaras"
-}
-```
-
-## Acknowledgments
-
-Thanks Dr. [Steven Atkinson](https://scholar.google.com/citations?user=MVrxtDkAAAAJ&hl=en) for providing Darcy flow simulation dataset.
-
-Code is inspired by [pix2pix](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix).
+### 5. 结果可视化分析
+代理模型表现除了查看诊断工具打印的指标外，还会直接生成高精度对比组。
+- **验证图路径**：请进入 `experiments/<最新序号>/training/predictions/` 目录查看 `pdf` 输出。
+- **图像阅读说明**：报告强制共用了色彩比例尺，共有 3 行图片，分别为：目标流场真实 CFD 值 (Row 1)；神经网络推理值 (Row 2)；两者绝对残差图 (Row 3)。残差呈现为贴近0的极淡纯色，则表明拟合质量完美。

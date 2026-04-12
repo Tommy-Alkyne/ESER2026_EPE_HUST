@@ -41,15 +41,29 @@ def print_error(msg):
 def print_metric(name, value, unit="", threshold_good=None, threshold_ok=None):
     """打印指标，带颜色标记"""
     if threshold_good is not None and threshold_ok is not None:
-        if value >= threshold_good:
-            color = Colors.GREEN
-            status = "✓ Good"
-        elif value >= threshold_ok:
-            color = Colors.YELLOW
-            status = "~ OK"
+        if threshold_good > threshold_ok:
+            # 越高越好 (例如 R²)
+            if value >= threshold_good:
+                color = Colors.GREEN
+                status = "✓ 优秀"
+            elif value >= threshold_ok:
+                color = Colors.YELLOW
+                status = "~ 达标"
+            else:
+                color = Colors.RED
+                status = "✗ 欠佳"
         else:
-            color = Colors.RED
-            status = "✗ Poor"
+            # 越低越好 (例如 RMSE)
+            if value <= threshold_good:
+                color = Colors.GREEN
+                status = "✓ 优秀"
+            elif value <= threshold_ok:
+                color = Colors.YELLOW
+                status = "~ 达标"
+            else:
+                color = Colors.RED
+                status = "✗ 欠佳"
+                
         print(f"  {name:25s}: {color}{value:10.6f}{Colors.END} {unit:10s} [{status}]")
     else:
         print(f"  {name:25s}: {value:10.6f} {unit}")
@@ -64,7 +78,7 @@ def load_training_logs(run_dir):
         try:
             with open(log_file, 'r') as f:
                 logs = json.load(f)
-            print_success(f"Loaded logs from {log_file}")
+            print_success(f"成功加载日志自 {log_file}")
         except Exception as e:
             print_warning(f"Failed to load {log_file}: {e}")
     
@@ -75,7 +89,7 @@ def load_metrics(train_dir):
     metrics = {}
     
     # 加载R²指标
-    r2_file = Path(train_dir) / 'r2.txt'
+    r2_file = Path(train_dir) / 'r2_test.txt'
     if r2_file.exists():
         try:
             r2_test = np.loadtxt(r2_file)
@@ -129,13 +143,13 @@ def analyze_predictions(pred_dir):
 
 def diagnose_model_quality(metrics):
     """诊断模型质量并给出建议"""
-    print_header("Model Quality Diagnosis")
+    print_header("模型质量综合诊断")
     
     issues = []
     suggestions = []
     
     if 'final_r2' not in metrics or 'final_rmse' not in metrics:
-        print_warning("Insufficient metrics data for diagnosis")
+        print_warning("指标数据不足，无法进行诊断")
         return
     
     r2 = metrics.get('final_r2', 0)
@@ -188,7 +202,7 @@ def diagnose_model_quality(metrics):
             issues.append("Convergence could be faster")
             suggestions.append("• Increase batch size")
         else:
-            print_success("✓ Good convergence rate")
+            print_success("✓ 优秀 convergence rate")
     
     # 输出问题和建议
     if issues:
@@ -205,33 +219,45 @@ def diagnose_model_quality(metrics):
 
 def find_latest_experiment():
     """查找最新的实验目录"""
-    exp_dir = Path('experiments/deterministic/kle4225')
+    exp_dir = Path('experiments')
     
     if not exp_dir.exists():
         return None
     
-    # 查找所有以ntrain开头的目录
-    exp_dirs = sorted(exp_dir.glob('ntrain*'))
+    valid_dirs = []
+    # 查找 experiments/ 下面所有包含 args.txt 文件的文件夹
+    for d in exp_dir.iterdir():
+        if d.is_dir() and (d / 'args.txt').exists():
+            valid_dirs.append(d)
+        # 支持递归查找旧格式（带子文件夹）
+        elif d.is_dir():
+            for sub_d in d.glob('kle*/ntrain*'):
+                if sub_d.is_dir() and (sub_d / 'args.txt').exists():
+                    valid_dirs.append(sub_d)
+            for sub_d in d.glob('kle*/nsamples*'):
+                if sub_d.is_dir() and (sub_d / 'args.txt').exists():
+                    valid_dirs.append(sub_d)
     
-    if not exp_dirs:
+    if not valid_dirs:
         return None
     
-    # 返回最新的（最后一个）
-    return exp_dirs[-1]
+    # 按照最近修改时间排序并返回最新的那个实验文件夹
+    valid_dirs.sort(key=lambda x: x.stat().st_mtime)
+    return valid_dirs[-1]
 
 def main():
-    print_header("T-Channel Fluid Field Prediction Quality Diagnostic")
+    print_header("T型流场预测质量诊断结果")
     
     # 查找实验目录
     exp_dir = find_latest_experiment()
     
     if not exp_dir:
-        print_error("No experiment directory found!")
-        print_info("Expected: experiments/deterministic/kle4225/ntrain*")
+        print_error("未找到实验目录！")
+        print_info("预期：experiments/ 目录下包含 args.txt 文件的任意文件夹")
         return 1
     
-    print_info(f"Found experiment: {exp_dir.name}")
-    print_info(f"Full path: {exp_dir}")
+    print_info(f"找到实验目录: {exp_dir.name}")
+    print_info(f"完整路径: {exp_dir}")
     
     # 定义路径
     run_dir = exp_dir
@@ -244,7 +270,7 @@ def main():
     pred_analysis = analyze_predictions(pred_dir)
     
     # 显示实验配置
-    print_header("Experiment Configuration")
+    print_header("实验配置信息")
     if logs:
         important_keys = ['ntrain', 'ntest', 'epochs', 'batch_size', 'lr', 
                          'weight_decay', 'blocks', 'growth_rate']
@@ -253,42 +279,42 @@ def main():
                 print(f"  {key:20s}: {logs[key]}")
     
     # 显示训练结果
-    print_header("Training Results")
+    print_header("训练结果评估")
     if metrics:
         if 'final_r2' in metrics:
-            print_metric("Final R²", metrics['final_r2'], threshold_good=0.95, threshold_ok=0.90)
+            print_metric("最终 R²", metrics['final_r2'], threshold_good=0.95, threshold_ok=0.90)
         if 'final_rmse' in metrics:
-            print_metric("Final RMSE", metrics['final_rmse'], threshold_good=0.03, threshold_ok=0.05)
+            print_metric("最终 RMSE", metrics['final_rmse'], threshold_good=0.03, threshold_ok=0.05)
     
     # 显示预测统计
-    print_header("Prediction Files")
-    print_info(f"Total PDF files: {pred_analysis['total_predictions']}")
+    print_header("预测结果文件")
+    print_info(f"PDF文件总数: {pred_analysis['total_predictions']}")
     if pred_analysis['epochs_with_predictions']:
-        print_info(f"Epochs with predictions: {pred_analysis['earliest_epoch']} - {pred_analysis['latest_epoch']}")
+        print_info(f"已有预测的 Epochs: {pred_analysis['earliest_epoch']} - {pred_analysis['latest_epoch']}")
     
     if pred_dir.exists():
         latest_pdf = sorted(pred_dir.glob('*.pdf'))
         if latest_pdf:
-            print_success(f"\nLatest prediction file: {latest_pdf[-1].name}")
-            print_info(f"View with: open {latest_pdf[-1]} (or double-click the file)")
+            print_success(f"\n最新的预测文件: {latest_pdf[-1].name}")
+            print_info(f"使用此命令查看: open {latest_pdf[-1]} (或直接双击该文件)")
     
     # 诊断
     if metrics:
         diagnose_model_quality(metrics)
     
     # 显示后续步骤
-    print_header("Next Steps")
-    print_info("1. Open the latest PDF file to visually inspect predictions")
-    print_info("2. Compare:")
-    print_info("   - Row 1: Target image")
-    print_info("   - Row 2: Predicted image (should be very similar to row 1)")
-    print_info("   - Row 3: Error map (should have small values, displayed as darker)")
+    print_header("后续建议步骤")
+    print_info("1. 打开最新的 PDF 文件肉眼检查预测效果")
+    print_info("2. 重点对比：")
+    print_info("      - 第 1 行: 真实流场目标图形")
+    print_info("      - 第 2 行: 预测生成图形 (应与第一行极其相似)")
+    print_info("      - 第 3 行: 残差误差图 (在纯色同比例尺下颜色应极浅，接近 0)")
     print_info("")
-    print_info("3. If quality is not satisfactory, try:")
-    print_info("   python run_training.py quick    # Quick optimization")
-    print_info("   python run_training.py advanced # Advanced optimization")
+    print_info("3. 如果质量未达预期，可以尝试：")
+    print_info("   运行 GUI 或者修改 training_config 调优")
+    print_info("   检查 lr / 调整 batch_size")
     print_info("")
-    print_info("4. View training curves:")
+    print_info("4. 查看训练收敛曲线：")
     print_info(f"   {train_dir}/r2.pdf - R² score evolution")
     print_info(f"   {train_dir}/rmse.pdf - RMSE evolution")
     
