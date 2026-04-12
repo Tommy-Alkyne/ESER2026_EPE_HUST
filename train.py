@@ -20,9 +20,9 @@ if '--use-3d' in sys.argv:
     use_3d = True
 
 if use_3d:
-    from args_det_3d import args, device
+    from args_3d import args, device
 else:
-    from args_det import args, device
+    from args import args, device
 from utils.misc import mkdirs
 
 # choose 2D/3D implementations depending on args.ndim (default 2)

@@ -129,7 +129,7 @@ class FluidTrainerGUI:
             return
             
         # 组装命令
-        cmd = ["python", "train_det.py"]
+        cmd = ["python", "train.py"]
         
         if self.train_file_var.get().strip():
             cmd.extend(["--train-file", self.train_file_var.get().strip()])

@@ -29,11 +29,11 @@
 │   ├── physics_loss.py     # 核心物理损失模块 (包含散度、NS方程残差的有限差分计算逻辑)
 │   ├── plot.py             # 自动出图脚本 (强制对齐真实值与误差值的色彩分布极值)
 │   └── load_data.py        # HDF5 流体数据的数据集加载与批次拆分
-├── train_det.py            # 主干训练脚本 (管理前向传播、联合物理损失后向计算与学习率调度)
+├── train.py            # 主干训练脚本 (管理前向传播、联合物理损失后向计算与学习率调度)
 ├── surrogate_predict.py    # 脱机推理脚本 (用于加载已训好的模型对新设计进行单张快推)
 ├── diagnose.py             # 智能诊断工具 (评估模型 R²、RMSE 并给出建议方案)
 ├── gui_trainer.py          # 图形化训练面板 (Tkinter UI)
-└── args_det.py             # 常规代理模型的超参数统一定义表
+└── args.py             # 常规代理模型的超参数统一定义表
 ```
 
 ---
@@ -64,7 +64,7 @@ python gui_trainer.py
 **方案 B：使用命令行 (适合批处理与服务器挂机)**
 通过 CLI 指定文件直接开始基于 PINN 约束的循环优化：
 ```bash
-python train_det.py --train-file p_v_256.hdf5 --test-file p_v_256.hdf5
+python train.py --train-file p_v_256.hdf5 --test-file p_v_256.hdf5
 ```
 
 ### 4. 训练监测诊断
