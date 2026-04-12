@@ -139,21 +139,6 @@ def smoothness_loss(tensor, weight=1.0):
     return smoothness * weight
 
 
-def boundary_gradient_loss(output, target, boundary_mask, weight=1.0):
-    """
-    边界梯度约束：在T型边界处施加更强的约束
-    """
-    if boundary_mask is None:
-        return torch.tensor(0.0, device=output.device)
-    
-    # 在边界处计算梯度
-    boundary_output = output * boundary_mask
-    boundary_target = target * boundary_mask
-    
-    grad_loss = F.l1_loss(boundary_output, boundary_target, reduction='mean')
-    return grad_loss * weight
-
-
 def reconstruction_loss(output, target, mask=None, use_weighted=False):
     """
     改进的重建损失，结合MSE和L1损失

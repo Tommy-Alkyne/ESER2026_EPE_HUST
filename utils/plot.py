@@ -30,20 +30,13 @@ def plot_prediction_det(save_dir, target, prediction, epoch, index,
     for j, ax in enumerate(fig.axes):
         ax.set_aspect('equal')
         ax.set_axis_off()
-        if j < 6:
-            if plot_fn == 'contourf':
-                cax = ax.contourf(samples[j], 50, cmap='jet',
-                                  vmin=vmin[j % 3], vmax=vmax[j % 3])
-            elif plot_fn =='imshow':
-                cax = ax.imshow(samples[j], cmap='jet', origin='lower',
-                                interpolation='bilinear',
-                                vmin=vmin[j % 3], vmax=vmax[j % 3])   
-        else:
-            if plot_fn == 'contourf':
-                cax = ax.contourf(samples[j], 50, cmap='jet')
-            elif plot_fn =='imshow':
-                cax = ax.imshow(samples[j], cmap='jet', origin='lower',
-                                interpolation='bilinear')
+        if plot_fn == 'contourf':
+            cax = ax.contourf(samples[j], 50, cmap='jet',
+                              vmin=vmin[j % 3], vmax=vmax[j % 3])
+        elif plot_fn =='imshow':
+            cax = ax.imshow(samples[j], cmap='jet', origin='lower',
+                            interpolation='bilinear',
+                            vmin=vmin[j % 3], vmax=vmax[j % 3])
         if plot_fn == 'contourf':
             for c in cax.collections:
                 c.set_edgecolor("face")

@@ -58,20 +58,13 @@ def plot_prediction_det(save_dir, target, prediction, epoch, index,
             else:
                 data = target[i] - prediction[i]
 
-            if r < 2:
-                if plot_fn == 'contourf':
-                    cax = ax.contourf(data, 50, cmap='jet',
-                                      vmin=vmin[i], vmax=vmax[i])
-                elif plot_fn == 'imshow':
-                    cax = ax.imshow(data, cmap='jet', origin='lower',
-                                    interpolation='bilinear',
-                                    vmin=vmin[i], vmax=vmax[i])
-            else:
-                if plot_fn == 'contourf':
-                    cax = ax.contourf(data, 50, cmap='jet')
-                elif plot_fn == 'imshow':
-                    cax = ax.imshow(data, cmap='jet', origin='lower',
-                                    interpolation='bilinear')
+            if plot_fn == 'contourf':
+                cax = ax.contourf(data, 50, cmap='jet',
+                                  vmin=vmin[i], vmax=vmax[i])
+            elif plot_fn == 'imshow':
+                cax = ax.imshow(data, cmap='jet', origin='lower',
+                                interpolation='bilinear',
+                                vmin=vmin[i], vmax=vmax[i])
 
             if plot_fn == 'contourf':
                 # 修复 Matplotlib 3.8+ 兼容性问题

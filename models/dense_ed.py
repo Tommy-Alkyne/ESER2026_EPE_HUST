@@ -47,16 +47,16 @@ class _DenseLayer(nn.Sequential):
         super(_DenseLayer, self).__init__()
         if bottleneck and in_features > bn_size * growth_rate:
             self.add_module('norm1', nn.BatchNorm2d(in_features))
-            self.add_module('relu1', nn.ReLU(inplace=True))
+            self.add_module('relu1', nn.SiLU(inplace=True))
             self.add_module('conv1', nn.Conv2d(in_features, bn_size *
                             growth_rate, kernel_size=1, stride=1, bias=False))
             self.add_module('norm2', nn.BatchNorm2d(bn_size * growth_rate))
-            self.add_module('relu2', nn.ReLU(inplace=True))
+            self.add_module('relu2', nn.SiLU(inplace=True))
             self.add_module('conv2', nn.Conv2d(bn_size * growth_rate, growth_rate,
                             kernel_size=3, stride=1, padding=1, bias=False))
         else:
             self.add_module('norm1', nn.BatchNorm2d(in_features))
-            self.add_module('relu1', nn.ReLU(inplace=True))
+            self.add_module('relu1', nn.SiLU(inplace=True))
             self.add_module('conv1', nn.Conv2d(in_features, growth_rate,
                             kernel_size=3, stride=1, padding=1, bias=False))
         if drop_rate > 0:
@@ -87,7 +87,7 @@ class _Transition(nn.Sequential):
         """
         super(_Transition, self).__init__()
         self.add_module('norm1', nn.BatchNorm2d(in_features))
-        self.add_module('relu1', nn.ReLU(inplace=True))
+        self.add_module('relu1', nn.SiLU(inplace=True))
         if down:
             # half feature resolution, reduce # feature maps
             if bottleneck:
@@ -97,7 +97,7 @@ class _Transition(nn.Sequential):
                 if drop_rate > 0:
                     self.add_module('dropout1', nn.Dropout2d(p=drop_rate))
                 self.add_module('norm2', nn.BatchNorm2d(out_features))
-                self.add_module('relu2', nn.ReLU(inplace=True))
+                self.add_module('relu2', nn.SiLU(inplace=True))
                 # self.add_module('pool', nn.AvgPool2d(kernel_size=2, stride=2))
                 # not using pooling, fully convolutional...
                 self.add_module('conv2', nn.Conv2d(out_features, out_features,
@@ -119,7 +119,7 @@ class _Transition(nn.Sequential):
                     self.add_module('dropout1', nn.Dropout2d(p=drop_rate))
 
                 self.add_module('norm2', nn.BatchNorm2d(out_features))
-                self.add_module('relu2', nn.ReLU(inplace=True))
+                self.add_module('relu2', nn.SiLU(inplace=True))
                 # output_padding=0, or 1 depends on the image size
                 # if image size is of the power of 2, then 1 is good
                 self.add_module('convT2', nn.ConvTranspose2d(
@@ -141,13 +141,13 @@ def last_decoding(in_features, out_channels, kernel_size, stride, padding,
     """
     last_up = nn.Sequential()
     last_up.add_module('norm1', nn.BatchNorm2d(in_features))
-    last_up.add_module('relu1', nn.ReLU(True))
+    last_up.add_module('relu1', nn.SiLU(True))
     last_up.add_module('conv1', nn.Conv2d(in_features, in_features // 2, 
                     kernel_size=1, stride=1, padding=0, bias=False))
     if drop_rate > 0.:
         last_up.add_module('dropout1', nn.Dropout2d(p=drop_rate))
     last_up.add_module('norm2', nn.BatchNorm2d(in_features // 2))
-    last_up.add_module('relu2', nn.ReLU(True))
+    last_up.add_module('relu2', nn.SiLU(True))
     last_up.add_module('convT2', nn.ConvTranspose2d(in_features // 2, 
                        out_channels, kernel_size=kernel_size, stride=stride, 
                        padding=padding, output_padding=output_padding, bias=bias))
@@ -158,7 +158,7 @@ def activation(name, *args):
     if name in ['tanh', 'Tanh']:
         return nn.Tanh()
     elif name in ['relu', 'ReLU']:
-        return nn.ReLU(inplace=True)
+        return nn.SiLU(inplace=True)
     elif name in ['lrelu', 'LReLU']:
         return nn.LeakyReLU(inplace=True)
     elif name in ['sigmoid', 'Sigmoid']:
