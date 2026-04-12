@@ -22,10 +22,11 @@ class CFDHDF5Dataset(Dataset):
             
             # ==========================================
             # [新增] 计算各物理通道(P, Vx, Vy)的全局最大最小值
-            # y_subset 的 shape 通常为 (N, C, H, W)
+            # 兼容 4D: (N, C, H, W) 或 5D: (N, C, D, H, W)
             # ==========================================
-            self.y_min = np.min(y_subset, axis=(0, 2, 3)) # Shape: (C,)
-            self.y_max = np.max(y_subset, axis=(0, 2, 3)) # Shape: (C,)
+            spatial_axes = tuple([0] + list(range(2, y_subset.ndim)))
+            self.y_min = np.min(y_subset, axis=spatial_axes) # Shape: (C,)
+            self.y_max = np.max(y_subset, axis=spatial_axes) # Shape: (C,)
 
     def __len__(self):
         return self.n_samples

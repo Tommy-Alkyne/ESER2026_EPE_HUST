@@ -31,6 +31,53 @@ class SpatialAttention(nn.Module):
         return x * attn_map
 # ========================================================
 
+# ========================================================
+# [新增] 结合 PINN 的 Transformer 瓶颈层模块：捕获流体全局连通性
+# ========================================================
+class TransformerBottleneck(nn.Module):
+    """
+    在编解码器结构最深处提取流体的全局拓扑依赖 (Global Dependency)
+    """
+    def __init__(self, channels, num_heads=4, mlp_ratio=4.0, dropout=0.0):
+        super(TransformerBottleneck, self).__init__()
+        # 1. 自注意力机制前的标准层归一化
+        self.norm1 = nn.LayerNorm(channels)
+        # 多头自注意力机制 (batch_first=True)
+        self.attn = nn.MultiheadAttention(embed_dim=channels, num_heads=num_heads, 
+                                          dropout=dropout, batch_first=True)
+        
+        # 2. 前馈神经网络 (FFN / MLP) 
+        self.norm2 = nn.LayerNorm(channels)
+        mlp_hidden_dim = int(channels * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, mlp_hidden_dim),
+            nn.SiLU(), 
+            nn.Dropout(dropout),
+            nn.Linear(mlp_hidden_dim, channels),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x):
+        # x shape: [B, C, H, W]
+        B, C, H, W = x.shape
+        
+        # 1. 展平并对换维度以适应 Transformer: [B, C, H, W] -> [B, H*W, C]
+        x_flat = x.flatten(2).transpose(1, 2)
+        
+        # 2. 计算多头自注意力并执行残差连接 (Residual)
+        x_norm = self.norm1(x_flat)
+        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        x_flat = x_flat + attn_out  
+        
+        # 3. 计算前馈 MLP 层并执行残差连接
+        x_norm2 = self.norm2(x_flat)
+        mlp_out = self.mlp(x_norm2)
+        x_flat = x_flat + mlp_out   
+        
+        # 4. 将序列平滑地还原回图像特征: [B, H*W, C] -> [B, C, H, W]
+        out = x_flat.transpose(1, 2).contiguous().view(B, C, H, W)
+        return out
+# ========================================================
 
 class _DenseLayer(nn.Sequential):
     """One dense layer within dense block, with bottleneck design.
@@ -172,7 +219,7 @@ def activation(name, *args):
 class DenseED(nn.Module):
     def __init__(self, in_channels, out_channels, blocks, growth_rate=16,
                  init_features=48, bn_size=8, drop_rate=0, bottleneck=False,
-                 out_activation=None):
+                 out_activation=None, output_size=None):
         super(DenseED, self).__init__()
         if len(blocks) > 1 and len(blocks) % 2 == 0:
             raise ValueError('length of blocks must be an odd number, but got {}'
@@ -204,6 +251,12 @@ class DenseED(nn.Module):
             self.features.add_module('TransDown%d' % (i + 1), trans_down)
             num_features = num_features // 2
             
+        # ===============================================================
+        # [新增] 在降维最深处、受压最极致的地方插入 Transformer (Bottleneck)
+        self.features.add_module('TransformerBottleneck', 
+                                 TransformerBottleneck(channels=num_features, num_heads=4))
+        # ===============================================================
+
         # Decoding / transition up ==============
         for i, num_layers in enumerate(dec_block_layers):
             block = _DenseBlock(num_layers=num_layers,

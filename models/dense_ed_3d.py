@@ -28,6 +28,48 @@ class SpatialAttention3D(nn.Module):
         return x * attn_map
 # ========================================================
 
+# ========================================================
+# [新增] 结合 PINN 的 3D Transformer 瓶颈层模块：捕获 3D 流体全局连通性
+# ========================================================
+class TransformerBottleneck3D(nn.Module):
+    """
+    在 3D 神经网络最深处提取流体的全局拓扑依赖
+    """
+    def __init__(self, channels, num_heads=4, mlp_ratio=4.0, dropout=0.0):
+        super(TransformerBottleneck3D, self).__init__()
+        self.norm1 = nn.LayerNorm(channels)
+        self.attn = nn.MultiheadAttention(embed_dim=channels, num_heads=num_heads, 
+                                          dropout=dropout, batch_first=True)
+        self.norm2 = nn.LayerNorm(channels)
+        mlp_hidden_dim = int(channels * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, mlp_hidden_dim),
+            nn.SiLU(), 
+            nn.Dropout(dropout),
+            nn.Linear(mlp_hidden_dim, channels),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x):
+        # x shape: [B, C, D, H, W]
+        B, C, D, H, W = x.shape
+        
+        # [B, C, D, H, W] -> [B, D*H*W, C]
+        x_flat = x.flatten(2).transpose(1, 2)
+        
+        x_norm = self.norm1(x_flat)
+        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        x_flat = x_flat + attn_out  
+        
+        x_norm2 = self.norm2(x_flat)
+        mlp_out = self.mlp(x_norm2)
+        x_flat = x_flat + mlp_out   
+        
+        # [B, D*H*W, C] -> [B, C, D, H, W]
+        out = x_flat.transpose(1, 2).contiguous().view(B, C, D, H, W)
+        return out
+# ========================================================
+
 class _DenseLayer3D(nn.Sequential):
     def __init__(self, in_features, growth_rate, drop_rate=0., bn_size=8,
                  bottleneck=False):
@@ -172,6 +214,9 @@ class DenseED3D(nn.Module):
             self.trans_downs.append(trans_down)
             num_features = num_features // 2
 
+        # [新增] 3D Transformer 瓶颈层
+        self.transformer_bottleneck = TransformerBottleneck3D(channels=num_features, num_heads=4)
+
         self.dec_blocks = nn.ModuleList()
         self.trans_ups = nn.ModuleList()
 
@@ -230,6 +275,9 @@ class DenseED3D(nn.Module):
             x = enc_block(x)
             skip_features.append(x)
             x = trans_down(x)
+
+        # [新增] 这里调用我们的 3D Transformer 瓶颈层，提取全局的流场特征
+        x = self.transformer_bottleneck(x)
 
         for i, dec_block in enumerate(self.dec_blocks):
             if i > 0:

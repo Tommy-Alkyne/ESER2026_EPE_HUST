@@ -29,11 +29,11 @@ from utils.misc import mkdirs
 if getattr(args, 'ndim', 2) == 3:
     from models.dense_ed_3d import DenseED as DenseED
     from utils.load_data_3d import load_data
-    from utils.plot_3d import plot_prediction_det, save_stats
+    from utils.plot_3d import plot_prediction, save_stats
 else:
     from models.dense_ed import DenseED
     from utils.load_data import load_data
-    from utils.plot import plot_prediction_det, save_stats
+    from utils.plot import plot_prediction, save_stats
 import json
 from time import time
 
@@ -83,28 +83,30 @@ elif getattr(args, 'ndim', 2) == 3:
 else:
     test_data_dir = args.data_dir + '/kle{}_mc{}.hdf5'.format(args.kle, args.ntest)
 
-# auto-detect channels and output size for 3D from training file
-if getattr(args, 'ndim', 2) == 3:
-    try:
-        with h5py.File(train_data_dir, 'r') as f:
-            y_shape = f['output'].shape
-            if len(y_shape) >= 5:
-                args.noc = y_shape[1]
-                args.image_size = list(y_shape[-3:])
-            elif len(y_shape) == 4:
-                args.noc = y_shape[1]
-                args.image_size = [1] + list(y_shape[-2:])
+# auto-detect channels and output size from training file (2D and 3D)
+try:
+    with h5py.File(train_data_dir, 'r') as f:
+        y_shape = f['output'].shape
+        if len(y_shape) >= 5:
+            args.noc = y_shape[1]
+            args.image_size = list(y_shape[-3:])
+        elif len(y_shape) == 4:
+            args.noc = y_shape[1]
+            args.image_size = [1] + list(y_shape[-2:])
+        else: # 3D (C, H, W)
+            args.noc = y_shape[1]
+            args.image_size = list(y_shape[-2:])
 
-            if 'sensor_input' in f:
-                x_shape = f['sensor_input'].shape
-            else:
-                x_shape = f['input'].shape
-            if len(x_shape) in [4, 5]:
-                args.nic = x_shape[1]
-            else:
-                args.nic = 1
-    except Exception as e:
-        print('Warning: failed to infer 3D data shapes from {}: {}'.format(train_data_dir, e))
+        if 'sensor_input' in f:
+            x_shape = f['sensor_input'].shape
+        else:
+            x_shape = f['input'].shape
+        if len(x_shape) in [4, 5]:
+            args.nic = x_shape[1]
+        else:
+            args.nic = 1
+except Exception as e:
+    print('Warning: failed to infer data shapes from {}: {}'.format(train_data_dir, e))
 
 # initialize model
 model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=getattr(args, 'noc', 3), 
@@ -182,7 +184,7 @@ def test(epoch):#epoch is a number
 
             for i in range(n_samples):
                 print('epoch {}: plotting prediction {}'.format(epoch, i))
-                plot_prediction_det(args.pred_dir, samples_target[i], 
+                plot_prediction(args.pred_dir, samples_target[i], 
                     samples_output[i], epoch, i, plot_fn=args.plot_fn)
             
             del samples_output, samples_target, idx
