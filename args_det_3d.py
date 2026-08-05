@@ -35,6 +35,8 @@ class Parser(argparse.ArgumentParser):
         # optional override files
         self.add_argument('--train-file', type=str, default=None, help='optional path to training hdf5 file')
         self.add_argument('--test-file', type=str, default=None, help='optional path to testing hdf5 file')
+        # when only --train-file is given, split it into train/test
+        self.add_argument('--split-ratio', type=float, default=0.7, help='train/test split ratio when only --train-file is provided (default: 0.7)')
 
         # training
         self.add_argument('--epochs', type=int, default=200, help='number of epochs to train (default: 200)')
@@ -87,6 +89,8 @@ class Parser(argparse.ArgumentParser):
             raise ValueError('`--class-weights` length must equal `--num-classes`')
         if len(args.cls_thresholds) != args.num_classes - 1:
             raise ValueError('`--cls-thresholds` length must equal `--num-classes - 1`')
+        if not 0.0 < args.split_ratio < 1.0:
+            raise ValueError('`--split-ratio` must be in (0, 1)')
 
         # seed
         if args.seed is None:

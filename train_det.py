@@ -99,6 +99,12 @@ elif getattr(args, 'ndim', 2) == 3:
 else:
     test_data_dir = args.data_dir + '/kle{}_mc{}.hdf5'.format(args.kle, args.ntest)
 
+# if only a training file was given (no --test-file), split it into train/test
+args.split_train = train_file is not None and test_file is None
+if args.split_train:
+    print('Only training data provided (no --test-file): splitting {} '
+          'into train/test at ratio {}.'.format(train_data_dir, args.split_ratio))
+
 # auto-detect channels and output size for 3D from training file
 if getattr(args, 'ndim', 2) == 3:
     try:
@@ -140,25 +146,36 @@ if getattr(args, 'ndim', 2) == 3:
 # initialize model
 num_classes = getattr(args, 'num_classes', 4)
 regression_channels = 1
-model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=num_classes + regression_channels,
-                blocks=args.blocks,
-                growth_rate=args.growth_rate, 
-                init_features=args.init_features,
-                drop_rate=args.drop_rate,
-                bn_size=args.bn_size,
-                bottleneck=args.bottleneck,
-                out_activation=None,
-                output_size=None if getattr(args, 'ndim', 2) == 3 else None).to(device)
+model_kwargs = dict(in_channels=getattr(args, 'nic', 1), out_channels=num_classes + regression_channels,
+                    blocks=args.blocks,
+                    growth_rate=args.growth_rate,
+                    init_features=args.init_features,
+                    drop_rate=args.drop_rate,
+                    bn_size=args.bn_size,
+                    bottleneck=args.bottleneck,
+                    out_activation=None)
+if getattr(args, 'ndim', 2) == 3:
+    model_kwargs['output_size'] = None
+model = DenseED(**model_kwargs).to(device)
 print(model)
 
-train_loader, train_stats = load_data(train_data_dir, args.batch_size)
-test_loader, test_stats = load_data(test_data_dir, args.test_batch_size)
+if getattr(args, 'split_train', False) and test_file is None:
+    # single training file provided: randomly split it into train/test
+    train_loader, test_loader, train_stats = load_data(
+        train_data_dir, args.batch_size,
+        test_batch_size=args.test_batch_size,
+        split_ratio=args.split_ratio,
+        split_seed=args.seed)
+    test_stats = train_stats
+else:
+    train_loader, train_stats = load_data(train_data_dir, args.batch_size)
+    test_loader, test_stats = load_data(test_data_dir, args.test_batch_size)
 print('Loaded data!')
 
 optimizer = optim.Adam(model.parameters(), lr=args.lr,
                        weight_decay=args.weight_decay)
 scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
-                    verbose=True, threshold=0.0001, threshold_mode='rel',
+                    threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
 class_weights = torch.tensor(getattr(args, 'class_weights', [1.0, 2.0, 4.0, 8.0]), dtype=torch.float).to(device)

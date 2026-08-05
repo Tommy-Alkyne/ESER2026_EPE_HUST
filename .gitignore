@@ -111,3 +111,6 @@ experiments/*
 
 #jupyter notebooks
 *.ipynb
+
+#Agents
+AGENTS.md

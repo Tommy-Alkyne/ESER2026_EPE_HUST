@@ -2,11 +2,12 @@ import torch
 import numpy as np
 import h5py
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, random_split
 
 
 def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
-              align_input_to_output=True, shuff=True, combine_inputs=True):
+              align_input_to_output=True, shuff=True, combine_inputs=True,
+              test_batch_size=None, split_ratio=None, split_seed=None):
     """Return data loader (3D).
 
     Args:
@@ -15,9 +16,19 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
         input_key (str|None): explicit input dataset key in hdf5
         prefer_sensor_input (bool): use `sensor_input` if present
         align_input_to_output (bool): resize input spatial size to match output
+        shuff (bool): shuffle the (full or train) loader
+        combine_inputs (bool): concatenate `spatial_input`+`input`+`sensor_input`
+        test_batch_size (int|None): batch size for the split-out test set
+        split_ratio (float|None): if not None, split the file into train/test
+            with this fraction used for training (the rest for testing) and
+            return (train_loader, test_loader, stats)
+        split_seed (int|None): seed for a reproducible random split
 
     Returns:
-        (data_loader (torch.utils.data.DataLoader), stats)
+        If split_ratio is None:
+            (data_loader (torch.utils.data.DataLoader), stats)
+        Else:
+            (train_loader, test_loader, stats)
     """
 
     def _reshape_to_5d(arr):
@@ -119,6 +130,32 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
               'pin_memory': True} if torch.cuda.is_available() else {}
 
     dataset = TensorDataset(x_tensor, y_tensor)
+
+    if split_ratio is not None:
+        if not 0.0 < split_ratio < 1.0:
+            raise ValueError('split_ratio must be in (0, 1), got {}'.format(split_ratio))
+        n_total = len(dataset)
+        n_train = int(n_total * split_ratio)
+        n_test = n_total - n_train
+        if n_train < 1 or n_test < 1:
+            raise ValueError('split_ratio {} leaves an empty train/test set ({} samples)'.format(split_ratio, n_total))
+        if test_batch_size is None:
+            test_batch_size = batch_size
+        gen = torch.Generator().manual_seed(split_seed) if split_seed is not None else None
+        train_set, test_set = random_split(dataset, [n_train, n_test], generator=gen)
+        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=shuff, **kwargs)
+        test_loader = DataLoader(test_set, batch_size=test_batch_size, shuffle=False, **kwargs)
+        print("split into train({}) / test({}) samples at ratio {}".format(n_train, n_test, split_ratio))
+
+        # simple statistics of output data
+        y_data_mean = np.mean(y_data, 0)
+        y_data_var = np.sum((y_data - y_data_mean) ** 2)
+        stats = {}
+        stats['y_mean'] = y_data_mean
+        stats['y_var'] = y_data_var
+
+        return train_loader, test_loader, stats
+
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuff, **kwargs)
 
     # simple statistics of output data
