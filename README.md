@@ -1,5 +1,27 @@
 # README 中文更新
 
+## 环境要求 (Python 环境)
+推荐使用 conda 创建环境, 安装以下依赖即可:
+
+```bash
+conda create -n eser python=3.12 -y
+conda activate eser
+pip install torch --index-url https://download.pytorch.org/whl/cpu   # 无GPU/本机Intel核显用CPU版
+# 或者有NVIDIA GPU时: pip install torch
+pip install numpy h5py matplotlib seaborn
+```
+
+如果不想用 conda, 直接用 `pip install` 安装同样依赖也可以.
+
+依赖清单:
+- Python 3.12
+- torch (近期版本, 代码使用 `padding_mode='replicate'`; 本机无NVIDIA GPU, 使用CPU版 `torch 2.13.0+cpu`)
+- numpy
+- h5py
+- matplotlib
+- seaborn
+
+
 ## Prediction 预测
 用来指定模型.pth文件和数据.hdf5文件来预测的脚本. 使用的是`surrogate_predict.py`
 ### 参数
