@@ -174,7 +174,7 @@ print('Loaded data!')
 
 optimizer = optim.Adam(model.parameters(), lr=args.lr,
                        weight_decay=args.weight_decay)
-scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=10,
+scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
                     threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
@@ -564,7 +564,7 @@ def train(epoch):
     avg_loss_reg = total_loss_reg / len(train_loader)
     avg_loss_grad = total_loss_grad / len(train_loader)
     acc = correct_pixels / total_valid_pixels if total_valid_pixels > 0 else 0.0
-    scheduler.step(acc)
+    scheduler.step(avg_loss)
     print("epoch: {}, training loss: {:.4f} (cls: {:.4f}, reg: {:.4f}, grad: {:.4f}), accuracy: {:.2f}%".format(
         epoch, avg_loss, avg_loss_cls, avg_loss_reg, avg_loss_grad, acc * 100))
 
