@@ -73,10 +73,15 @@ def parse_args():
 
 def _auto_detect_ndim(data_file):
 	with h5py.File(data_file, 'r') as f:
-		x = f['input'][()]
+		if 'spatial_input' in f:
+			x_shape = f['spatial_input'].shape
+		elif 'output' in f:
+			x_shape = f['output'].shape
+		else:
+			x_shape = f['input'].shape
 	# 2D: (N, C, H, W); 3D: (N, C, D, H, W)
-	ndim = 3 if x.ndim == 5 else 2
-	return ndim, x.shape
+	ndim = 3 if len(x_shape) == 5 else 2
+	return ndim, x_shape
 
 
 def _build_model(args, device):
@@ -133,17 +138,27 @@ def _load_data(args):
 	# Use repo loaders to keep preprocessing consistent
 	if args.ndim == 3:
 		from utils.load_data_3d import load_data
+		loader, stats = load_data(
+			args.data_file,
+			args.batch_size,
+			input_key=None,
+			prefer_sensor_input=False,
+			align_input_to_output=True,
+			shuff=False,
+		)
 	else:
 		from utils.load_data import load_data
-	loader, stats = load_data(
-		args.data_file,
-		args.batch_size,
-		input_key=None,
-		prefer_sensor_input=False,
-		align_input_to_output=True,
-		shuff=False
-	)
+		loader, stats = load_data(args.data_file, args.batch_size)
 	return loader, stats
+
+
+def _unpack_batch(batch):
+	if len(batch) == 3:
+		return batch
+	if len(batch) == 2:
+		x, target = batch
+		return x, target, None
+	raise ValueError('Expected (input, target[, mask]), got {} items'.format(len(batch)))
 
 
 def main():
@@ -188,7 +203,7 @@ def main():
 
 	# Prepare output array preallocation using model output shape
 	# (robust to discrete models where out_channels may differ from dataset output channels)
-	sample_x, sample_y = loader.dataset[0]
+	sample_x, sample_y, sample_mask = _unpack_batch(loader.dataset[0])
 	with torch.no_grad():
 		sample_pred = _model_forward_with_optional_pad(
 			model,
@@ -215,13 +230,15 @@ def main():
 	else:
 		pred_shape = (n_total,) + tuple(sample_pred.shape[1:])
 		preds = np.zeros(pred_shape, dtype=np.float32)
+	masks = np.zeros((n_total, 1) + tuple(sample_pred.shape[2:]), dtype=np.uint8)
 
 	# Iterate and predict
 	idx_write = 0
 	with torch.no_grad():
-		for batch_idx, (x, y_true) in enumerate(loader):
+		for batch_idx, batch in enumerate(loader):
 			if args.limit is not None and idx_write >= args.limit:
 				break
+			x, y_true, domain_mask = _unpack_batch(batch)
 			x = x.to(device)
 			# 拿到包含 5 个通道的完整输出 (B, 5, D, H, W)
 			y_pred_full = _model_forward_with_optional_pad(
@@ -273,20 +290,25 @@ def main():
 					y_pred = y_pred_full
 			else:
 				y_pred = y_pred_full
+
+			if domain_mask is None:
+				mask_np = np.ones(
+					(y_pred.shape[0], 1) + tuple(y_pred.shape[2:]), dtype=np.uint8
+				)
+			else:
+				mask_np = domain_mask.detach().cpu().numpy().astype(np.uint8)
+			if mask_np.shape[1] != 1 or tuple(mask_np.shape[2:]) != tuple(y_pred.shape[2:]):
+				raise ValueError(
+					'Mask shape {} does not match prediction shape {}'.format(
+						mask_np.shape, y_pred.shape
+					)
+				)
+			y_pred = np.where(mask_np.astype(bool), y_pred, 0)
 			bs = y_pred.shape[0]
 			end = min(idx_write + bs, n_total)
 			preds[idx_write:end] = y_pred[:(end - idx_write)]
+			masks[idx_write:end] = mask_np[:(end - idx_write)]
 			idx_write = end
-
-	# Apply T-mask: zero-out regions outside the two rectangles
-	# 修复 NumPy 切片语法的潜在 Bug
-	if preds.ndim >= 2:
-		h, w = preds.shape[-2:]
-		mask = np.zeros((h, w), dtype=bool)
-		mask[0:137, 0:35] = True
-		mask[51:86, 35:137] = True
-		# 这一句不论是 4D 还是 5D，都能完美应用在最后两维上
-		preds[..., ~mask] = 0.0
 
 	# Determine output file path
 	if args.out_file is None:
@@ -298,6 +320,7 @@ def main():
 	if args.out_file.lower().endswith('.hdf5') or args.out_file.lower().endswith('.h5'):
 		with h5py.File(args.out_file, 'w') as f:
 			f.create_dataset('predictions', data=preds, compression='gzip')
+			f.create_dataset('mask', data=masks, compression='gzip')
 			f.attrs['source_data'] = args.data_file
 			f.attrs['ckpt_file'] = args.ckpt_file
 			f.attrs['save_mode'] = save_mode
@@ -310,9 +333,12 @@ def main():
 			f.attrs['drop_rate'] = args.drop_rate
 			f.attrs['bn_size'] = args.bn_size
 			f.attrs['bottleneck'] = int(bool(args.bottleneck))
+			f.attrs['concentration_normalization'] = stats.get(
+				'concentration_normalization', 'none'
+			)
 	else:
 		# Fallback: npz
-		np.savez_compressed(args.out_file, predictions=preds, meta={
+		np.savez_compressed(args.out_file, predictions=preds, mask=masks, meta={
 			'source_data': args.data_file,
 			'ckpt_file': args.ckpt_file,
 			'save_mode': save_mode,
@@ -325,6 +351,7 @@ def main():
 			'drop_rate': args.drop_rate,
 			'bn_size': args.bn_size,
 			'bottleneck': bool(args.bottleneck),
+			'concentration_normalization': stats.get('concentration_normalization', 'none'),
 		})
 
 	print('Predictions saved to:', args.out_file)
@@ -333,4 +360,3 @@ def main():
 
 if __name__ == '__main__':
 	main()
-

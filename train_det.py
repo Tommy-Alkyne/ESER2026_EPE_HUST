@@ -198,23 +198,14 @@ logger['loss_grad_train'] = []
 logger['loss_grad_test'] = []
 logger['time'] = []
 
-def build_t_mask(output):
-    h, w = output.shape[-2:]
-    mask_2d = torch.zeros((h, w), device=output.device, dtype=output.dtype)
-    y1 = min(137, h)
-    x1 = min(35, w)
-    if y1 > 0 and x1 > 0:
-        mask_2d[0:y1, 0:x1] = 1.0
-    y0, y1b = min(51, h), min(86, h)
-    x0, x1b = min(35, w), min(137, w)
-    if y1b > y0 and x1b > x0:
-        mask_2d[y0:y1b, x0:x1b] = 1.0
-    if output.dim() == 4:
-        return mask_2d.unsqueeze(0).unsqueeze(0)
-    if output.dim() == 5:
-        d = output.shape[-3]
-        return mask_2d.unsqueeze(0).unsqueeze(0).unsqueeze(2).repeat(1, 1, d, 1, 1)
-    raise ValueError('Unsupported output dim {}'.format(output.dim()))
+def unpack_data_batch(batch):
+    """Accept mask-aware 3D data and legacy two-tensor datasets."""
+    if len(batch) == 3:
+        return batch
+    if len(batch) == 2:
+        input_data, target = batch
+        return input_data, target, None
+    raise ValueError('Expected (input, target[, mask]), got {} items'.format(len(batch)))
 
 
 def pad_hw_to_multiple(x, multiple=16, mode='replicate'):
@@ -311,13 +302,31 @@ def select_target_channel(target):
     return target
 
 
-def apply_ignore_index_with_t_mask(target_discrete, output):
-    t_mask = build_t_mask(output)
-    t_mask_bool = t_mask.squeeze(1).bool()
-    if t_mask_bool.shape[0] == 1 and target_discrete.shape[0] > 1:
-        t_mask_bool = t_mask_bool.expand(target_discrete.shape[0], *t_mask_bool.shape[1:])
-    target_discrete[~t_mask_bool] = -100
-    return target_discrete, t_mask_bool
+def apply_ignore_index_with_mask(target_discrete, domain_mask):
+    if domain_mask is None:
+        mask_bool = torch.ones_like(target_discrete, dtype=torch.bool)
+    else:
+        mask_bool = domain_mask.to(device=target_discrete.device).bool()
+        if mask_bool.dim() == target_discrete.dim() + 1:
+            if mask_bool.shape[1] != 1:
+                raise ValueError('Mask channel dimension must be 1, got {}'.format(mask_bool.shape))
+            mask_bool = mask_bool.squeeze(1)
+        if mask_bool.dim() != target_discrete.dim():
+            raise ValueError(
+                'Mask shape {} is incompatible with target shape {}'.format(
+                    tuple(mask_bool.shape), tuple(target_discrete.shape)
+                )
+            )
+        if mask_bool.shape[0] == 1 and target_discrete.shape[0] > 1:
+            mask_bool = mask_bool.expand(target_discrete.shape[0], *mask_bool.shape[1:])
+        if tuple(mask_bool.shape) != tuple(target_discrete.shape):
+            raise ValueError(
+                'Mask shape {} does not match target shape {}'.format(
+                    tuple(mask_bool.shape), tuple(target_discrete.shape)
+                )
+            )
+    target_discrete[~mask_bool] = -100
+    return target_discrete, mask_bool
 
 
 def compute_gradient_loss(output, target, mask=None):
@@ -367,8 +376,11 @@ def test(epoch):#epoch is a number
     total_loss_grad = 0.
     correct_pixels = 0
     total_valid_pixels = 0
-    for batch_idx, (input, target) in enumerate(test_loader):
+    for batch_idx, batch in enumerate(test_loader):
+        input, target, domain_mask = unpack_data_batch(batch)
         input, target = input.to(device), target.to(device)
+        if domain_mask is not None:
+            domain_mask = domain_mask.to(device)
         input_padded, h_slice, w_slice = maybe_pad_model_input(input)
         output_padded = model(input_padded)
         output = crop_model_output(output_padded, h_slice, w_slice)
@@ -382,7 +394,9 @@ def test(epoch):#epoch is a number
         target_center = labels_to_centers(target_discrete, bin_centers)
         target_residual = target_continuous - target_center
         target_discrete_ce = target_discrete.clone()
-        target_discrete_ce, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete_ce, out_class)
+        target_discrete_ce, domain_mask_bool = apply_ignore_index_with_mask(
+            target_discrete_ce, domain_mask
+        )
 
         # Soft-argmax center for smoother gradient supervision field
         probs = F.softmax(out_class, dim=1)
@@ -392,15 +406,17 @@ def test(epoch):#epoch is a number
         pred_center_soft = torch.sum(probs * bin_centers_expanded, dim=1, keepdim=True)
 
         loss_cls = criterion_ce(out_class, target_discrete_ce)
-        t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
+        domain_mask_reg_bool = domain_mask_bool.unsqueeze(1).expand_as(out_reg)
         pred_continuous_for_loss = pred_center_soft + out_reg
-        if t_mask_reg_bool.any():
-            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_residual[t_mask_reg_bool])
+        if domain_mask_reg_bool.any():
+            loss_reg = F.l1_loss(
+                out_reg[domain_mask_reg_bool], target_residual[domain_mask_reg_bool]
+            )
             loss_grad = compute_gradient_loss(
                 pred_continuous_for_loss,
                 target_continuous,
-                mask=t_mask_reg_bool.float()
-            ) / t_mask_reg_bool.sum().float().clamp(min=1.0)
+                mask=domain_mask_reg_bool.float()
+            ) / domain_mask_reg_bool.sum().float().clamp(min=1.0)
         else:
             loss_reg = torch.tensor(0.0, device=output.device)
             loss_grad = torch.tensor(0.0, device=output.device)
@@ -439,7 +455,7 @@ def test(epoch):#epoch is a number
             idx = torch.randperm(input.size(0))[:n_samples]
 
             pred_continuous_plot = pred_continuous.clone()
-            pred_continuous_plot[~t_mask_reg_bool] = 0.0
+            pred_continuous_plot[~domain_mask_reg_bool] = 0.0
             samples_output = pred_continuous_plot.data.cpu()[idx].numpy()
             samples_target = target_continuous.data.cpu()[idx].numpy()
 
@@ -471,8 +487,11 @@ def train(epoch):
     total_loss_grad = 0.
     correct_pixels = 0
     total_valid_pixels = 0
-    for _, (input, target) in enumerate(train_loader):
+    for _, batch in enumerate(train_loader):
+        input, target, domain_mask = unpack_data_batch(batch)
         input, target = input.to(device), target.to(device)
+        if domain_mask is not None:
+            domain_mask = domain_mask.to(device)
         model.zero_grad()
         input_padded, h_slice, w_slice = maybe_pad_model_input(input)
         output_padded = model(input_padded)
@@ -487,18 +506,22 @@ def train(epoch):
         target_center = labels_to_centers(target_discrete, bin_centers)
         target_residual = target_continuous - target_center
         target_discrete_ce = target_discrete.clone()
-        target_discrete_ce, t_mask_bool = apply_ignore_index_with_t_mask(target_discrete_ce, out_class)
+        target_discrete_ce, domain_mask_bool = apply_ignore_index_with_mask(
+            target_discrete_ce, domain_mask
+        )
 
         loss_cls = criterion_ce(out_class, target_discrete_ce)
-        t_mask_reg_bool = t_mask_bool.unsqueeze(1).expand_as(out_reg)
+        domain_mask_reg_bool = domain_mask_bool.unsqueeze(1).expand_as(out_reg)
         pred_continuous_for_loss = target_center + out_reg
-        if t_mask_reg_bool.any():
-            loss_reg = F.l1_loss(out_reg[t_mask_reg_bool], target_residual[t_mask_reg_bool])
+        if domain_mask_reg_bool.any():
+            loss_reg = F.l1_loss(
+                out_reg[domain_mask_reg_bool], target_residual[domain_mask_reg_bool]
+            )
             loss_grad = compute_gradient_loss(
                 pred_continuous_for_loss,
                 target_continuous,
-                mask=t_mask_reg_bool.float()
-            ) / t_mask_reg_bool.sum().float().clamp(min=1.0)
+                mask=domain_mask_reg_bool.float()
+            ) / domain_mask_reg_bool.sum().float().clamp(min=1.0)
         else:
             loss_reg = torch.tensor(0.0, device=output.device)
             loss_grad = torch.tensor(0.0, device=output.device)
