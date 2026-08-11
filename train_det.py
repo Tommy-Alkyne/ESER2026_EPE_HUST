@@ -201,11 +201,11 @@ logger['time'] = []
 def build_t_mask(output):
     h, w = output.shape[-2:]
     mask_2d = torch.zeros((h, w), device=output.device, dtype=output.dtype)
-    y1 = min(136, h)
+    y1 = min(137, h)
     x1 = min(35, w)
     if y1 > 0 and x1 > 0:
         mask_2d[0:y1, 0:x1] = 1.0
-    y0, y1b = min(51, h), min(87, h)
+    y0, y1b = min(51, h), min(86, h)
     x0, x1b = min(35, w), min(137, w)
     if y1b > y0 and x1b > x0:
         mask_2d[y0:y1b, x0:x1b] = 1.0

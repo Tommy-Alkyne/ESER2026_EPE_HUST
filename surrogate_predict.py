@@ -283,8 +283,8 @@ def main():
 	if preds.ndim >= 2:
 		h, w = preds.shape[-2:]
 		mask = np.zeros((h, w), dtype=bool)
-		mask[0:136, 0:35] = True
-		mask[51:87, 35:137] = True
+		mask[0:137, 0:35] = True
+		mask[51:86, 35:137] = True
 		# 这一句不论是 4D 还是 5D，都能完美应用在最后两维上
 		preds[..., ~mask] = 0.0
 
