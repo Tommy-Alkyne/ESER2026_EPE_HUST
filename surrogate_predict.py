@@ -21,6 +21,11 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import h5py
+from utils.hybrid_bins import (
+	DEFAULT_CLS_THRESHOLDS,
+	bin_center_ratios_from_thresholds,
+	validate_cls_thresholds,
+)
 
 
 def parse_args():
@@ -49,12 +54,16 @@ def parse_args():
 	p.add_argument('--device', type=str, default=None, help='Device override, e.g. cuda:0 or cpu')
 	p.add_argument('--save-mode', type=str, default='auto', choices=['auto', 'logits', 'class', 'reg'],
 			   help='How to save predictions: reg (continuous regression), logits (raw model output), class (argmax labels), or auto')
-	p.add_argument('--bin-center-ratios', nargs='+', type=float, default=[0.05, 0.25, 0.55, 0.85],
-			   help='Relative bin center ratios for class-center + residual reconstruction')
-	p.add_argument('--center-max-source', type=str, default='fixed', choices=['fixed', 'target'],
-			   help='How to get absolute max for bin centers in reg mode: fixed uses --center-max-value, target uses batch target max')
+	p.add_argument('--cls-thresholds', nargs='+', type=float, default=None,
+			   help='Training class thresholds. If omitted, read them from the checkpoint run args.txt')
+	p.add_argument('--bin-center-ratios', nargs='+', type=float, default=None,
+			   help='Explicit center-ratio override; by default centers are derived from --cls-thresholds exactly as in training')
+	p.add_argument('--center-max-source', type=str, default='target', choices=['fixed', 'target'],
+			   help='target exactly matches training; fixed supports inference without using the target maximum')
 	p.add_argument('--center-max-value', type=float, default=1.0,
 			   help='Absolute max value used when --center-max-source=fixed')
+	p.add_argument('--target-channel', type=int, default=None,
+			   help='Target channel used to compute target maximum; defaults to the training args.txt value')
 	p.add_argument('--pad-multiple', type=int, default=16,
 			   help='For 3D inference: pad H/W to this multiple before model forward, then crop back')
 
@@ -67,6 +76,30 @@ def parse_args():
 			raise ValueError
 	except Exception:
 		raise ValueError('--blocks must be a JSON-like list, e.g. "[3, 6, 3]"')
+
+	training_args_path = os.path.join(
+		os.path.dirname(os.path.dirname(os.path.abspath(args.ckpt_file))),
+		'args.txt',
+	)
+	training_args = {}
+	if os.path.isfile(training_args_path):
+		try:
+			with open(training_args_path, 'r') as args_file:
+				training_args = json.load(args_file)
+		except (OSError, ValueError) as exc:
+			print('Warning: failed to read training args from {}: {}'.format(training_args_path, exc))
+
+	if args.cls_thresholds is None:
+		args.cls_thresholds = training_args.get(
+			'cls_thresholds', list(DEFAULT_CLS_THRESHOLDS)
+		)
+	args.cls_thresholds = list(validate_cls_thresholds(args.cls_thresholds))
+	if args.bin_center_ratios is None:
+		args.bin_center_ratios = list(
+			bin_center_ratios_from_thresholds(args.cls_thresholds)
+		)
+	if args.target_channel is None:
+		args.target_channel = int(training_args.get('target_channel', 0))
 
 	return args
 
@@ -89,18 +122,20 @@ def _build_model(args, device):
 		from models.dense_ed_3d import DenseED as DenseED
 	else:
 		from models.dense_ed import DenseED
-	model = DenseED(
-		in_channels=args.nic,
-		out_channels=args.noc,
-		blocks=args.blocks,
-		growth_rate=args.growth_rate,
-		init_features=args.init_features,
-		drop_rate=args.drop_rate,
-		bn_size=args.bn_size,
-		bottleneck=args.bottleneck,
-		out_activation=None,
-		output_size=None if args.ndim == 3 else None,
-	).to(device)
+	model_kwargs = {
+		'in_channels': args.nic,
+		'out_channels': args.noc,
+		'blocks': args.blocks,
+		'growth_rate': args.growth_rate,
+		'init_features': args.init_features,
+		'drop_rate': args.drop_rate,
+		'bn_size': args.bn_size,
+		'bottleneck': args.bottleneck,
+		'out_activation': None,
+	}
+	if args.ndim == 3:
+		model_kwargs['output_size'] = None
+	model = DenseED(**model_kwargs).to(device)
 	return model
 
 
@@ -136,6 +171,15 @@ def _model_forward_with_optional_pad(model, x, ndim, pad_multiple=16):
 
 def _load_data(args):
 	# Use repo loaders to keep preprocessing consistent
+	hybrid_kwargs = {
+		'prepare_hybrid_targets': True,
+		'cls_thresholds': args.cls_thresholds,
+		'num_classes': len(args.bin_center_ratios),
+		'target_channel': args.target_channel,
+		'center_max_source': args.center_max_source,
+		'center_max_value': args.center_max_value,
+		'bin_center_ratios': args.bin_center_ratios,
+	}
 	if args.ndim == 3:
 		from utils.load_data_3d import load_data
 		loader, stats = load_data(
@@ -145,20 +189,32 @@ def _load_data(args):
 			prefer_sensor_input=False,
 			align_input_to_output=True,
 			shuff=False,
+			**hybrid_kwargs
 		)
 	else:
 		from utils.load_data import load_data
-		loader, stats = load_data(args.data_file, args.batch_size)
+		loader, stats = load_data(
+			args.data_file,
+			args.batch_size,
+			shuff=False,
+			**hybrid_kwargs
+		)
 	return loader, stats
 
 
-def _unpack_batch(batch):
-	if len(batch) == 3:
-		return batch
-	if len(batch) == 2:
-		x, target = batch
-		return x, target, None
-	raise ValueError('Expected (input, target[, mask]), got {} items'.format(len(batch)))
+def _validate_preprocessed_batch(batch):
+	required = {'input', 'target_continuous', 'bin_centers', 'mask'}
+	if not isinstance(batch, dict):
+		raise TypeError('Expected a dict batch from load_data, got {}'.format(type(batch)))
+	missing = required.difference(batch)
+	if missing:
+		raise KeyError('Batch is missing fields: {}'.format(sorted(missing)))
+	return (
+		batch['input'],
+		batch['target_continuous'],
+		batch['bin_centers'],
+		batch['mask'],
+	)
 
 
 def main():
@@ -203,7 +259,7 @@ def main():
 
 	# Prepare output array preallocation using model output shape
 	# (robust to discrete models where out_channels may differ from dataset output channels)
-	sample_x, sample_y, sample_mask = _unpack_batch(loader.dataset[0])
+	sample_x, sample_y, _, sample_mask = _validate_preprocessed_batch(loader.dataset[0])
 	with torch.no_grad():
 		sample_pred = _model_forward_with_optional_pad(
 			model,
@@ -238,7 +294,7 @@ def main():
 		for batch_idx, batch in enumerate(loader):
 			if args.limit is not None and idx_write >= args.limit:
 				break
-			x, y_true, domain_mask = _unpack_batch(batch)
+			x, _, bin_centers_tensor, domain_mask = _validate_preprocessed_batch(batch)
 			x = x.to(device)
 			# 拿到包含 5 个通道的完整输出 (B, 5, D, H, W)
 			y_pred_full = _model_forward_with_optional_pad(
@@ -255,24 +311,13 @@ def main():
 					out_class = y_pred_full[:, :-1, ...]  # 前四个通道是分类 logits
 					out_reg = y_pred_full[:, -1:, ...]    # 最后一个是残差回归通道
 					num_classes = out_class.shape[1]
-					if len(args.bin_center_ratios) != num_classes:
+					bin_centers = bin_centers_tensor.detach().cpu().numpy()
+					if bin_centers.shape[1] != num_classes:
 						raise ValueError(
-							'`--bin-center-ratios` length ({}) must equal number of class channels ({})'.format(
-								len(args.bin_center_ratios), num_classes
+							'Preprocessed bin center count ({}) must equal number of class channels ({})'.format(
+								bin_centers.shape[1], num_classes
 							)
 						)
-
-					if args.center_max_source == 'target':
-						y_true_np = y_true.detach().cpu().numpy()
-						if y_true_np.ndim < 2:
-							raise ValueError('target tensor shape is invalid for center-max-source=target')
-						y_true_first = y_true_np[:, :1, ...]
-						batch_max = np.maximum(y_true_first.reshape(y_true_first.shape[0], -1).max(axis=1), 1e-8).astype(np.float32)
-					else:
-						batch_max = np.full((out_reg.shape[0],), max(float(args.center_max_value), 1e-8), dtype=np.float32)
-
-					center_ratios = np.array(args.bin_center_ratios, dtype=np.float32)
-					bin_centers = batch_max[:, None] * center_ratios[None, :]  # (B, C)
 
 					# Soft-argmax style assembly: center = sum(p_k * c_k)
 					# stable softmax over class channel
@@ -333,6 +378,10 @@ def main():
 			f.attrs['drop_rate'] = args.drop_rate
 			f.attrs['bn_size'] = args.bn_size
 			f.attrs['bottleneck'] = int(bool(args.bottleneck))
+			f.attrs['cls_thresholds'] = json.dumps(args.cls_thresholds)
+			f.attrs['bin_center_ratios'] = json.dumps(args.bin_center_ratios)
+			f.attrs['center_max_source'] = args.center_max_source
+			f.attrs['target_channel'] = args.target_channel
 			f.attrs['concentration_normalization'] = stats.get(
 				'concentration_normalization', 'none'
 			)
@@ -351,6 +400,10 @@ def main():
 			'drop_rate': args.drop_rate,
 			'bn_size': args.bn_size,
 			'bottleneck': bool(args.bottleneck),
+			'cls_thresholds': args.cls_thresholds,
+			'bin_center_ratios': args.bin_center_ratios,
+			'center_max_source': args.center_max_source,
+			'target_channel': args.target_channel,
 			'concentration_normalization': stats.get('concentration_normalization', 'none'),
 		})
 

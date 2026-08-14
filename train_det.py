@@ -146,7 +146,8 @@ if getattr(args, 'ndim', 2) == 3:
 # initialize model
 num_classes = getattr(args, 'num_classes', 4)
 regression_channels = 1
-model_kwargs = dict(in_channels=getattr(args, 'nic', 1), out_channels=num_classes + regression_channels,
+model_kwargs = dict(in_channels=getattr(args, 'nic', 1),
+                    out_channels=num_classes + regression_channels,
                     blocks=args.blocks,
                     growth_rate=args.growth_rate,
                     init_features=args.init_features,
@@ -159,17 +160,35 @@ if getattr(args, 'ndim', 2) == 3:
 model = DenseED(**model_kwargs).to(device)
 print(model)
 
+data_preprocess_kwargs = {
+    'prepare_hybrid_targets': True,
+    'cls_thresholds': args.cls_thresholds,
+    'num_classes': num_classes,
+    'target_channel': args.target_channel,
+    'ignore_index': -100,
+}
+
 if getattr(args, 'split_train', False) and test_file is None:
     # single training file provided: randomly split it into train/test
     train_loader, test_loader, train_stats = load_data(
         train_data_dir, args.batch_size,
         test_batch_size=args.test_batch_size,
         split_ratio=args.split_ratio,
-        split_seed=args.seed)
+        split_seed=args.seed,
+        **data_preprocess_kwargs)
     test_stats = train_stats
 else:
-    train_loader, train_stats = load_data(train_data_dir, args.batch_size)
-    test_loader, test_stats = load_data(test_data_dir, args.test_batch_size)
+    train_loader, train_stats = load_data(
+        train_data_dir,
+        args.batch_size,
+        **data_preprocess_kwargs
+    )
+    test_loader, test_stats = load_data(
+        test_data_dir,
+        args.test_batch_size,
+        shuff=False,
+        **data_preprocess_kwargs
+    )
 print('Loaded data!')
 
 optimizer = optim.Adam(model.parameters(), lr=args.lr,
@@ -178,7 +197,13 @@ scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
                     threshold=0.0001, threshold_mode='rel',
                     cooldown=0, min_lr=0, eps=1e-8)
 
-class_weights = torch.tensor(getattr(args, 'class_weights', [1.0, 2.0, 4.0, 8.0]), dtype=torch.float).to(device)
+class_weights = torch.tensor(getattr(
+    args,
+    'class_weights',
+    [1.0, 2.0, 4.0, 8.0]),
+    dtype=torch.float
+    ).to(device)
+
 criterion_ce = nn.CrossEntropyLoss(
     weight=class_weights, 
     ignore_index=-100)
@@ -198,14 +223,77 @@ logger['loss_grad_train'] = []
 logger['loss_grad_test'] = []
 logger['time'] = []
 
-def unpack_data_batch(batch):
-    """Accept mask-aware 3D data and legacy two-tensor datasets."""
-    if len(batch) == 3:
-        return batch
-    if len(batch) == 2:
-        input_data, target = batch
-        return input_data, target, None
-    raise ValueError('Expected (input, target[, mask]), got {} items'.format(len(batch)))
+def validate_hybrid_batch(batch):
+    """Validate and unpack a loss-ready batch produced by ``load_data``."""
+    required = {
+        'input',
+        'target_continuous',
+        'target_class',
+        'target_center',
+        'target_residual',
+        'bin_centers',
+        'mask',
+    }
+    if not isinstance(batch, dict):
+        raise TypeError('Expected a dict batch from load_data, got {}'.format(type(batch)))
+    missing = required.difference(batch)
+    if missing:
+        raise KeyError('Batch is missing fields: {}'.format(sorted(missing)))
+
+    input_data = batch['input']
+    target_continuous = batch['target_continuous']
+    target_class = batch['target_class']
+    target_center = batch['target_center']
+    target_residual = batch['target_residual']
+    bin_centers = batch['bin_centers']
+    domain_mask = batch['mask']
+
+    if target_continuous.dim() not in (4, 5) or target_continuous.shape[1] != 1:
+        raise ValueError(
+            'target_continuous must be (B, 1, spatial...), got {}'.format(
+                tuple(target_continuous.shape)
+            )
+        )
+    if tuple(target_class.shape) != (
+        target_continuous.shape[0], *target_continuous.shape[2:]
+    ):
+        raise ValueError(
+            'target_class shape {} is incompatible with target {}'.format(
+                tuple(target_class.shape), tuple(target_continuous.shape)
+            )
+        )
+    for name, tensor in (
+        ('target_center', target_center),
+        ('target_residual', target_residual),
+        ('mask', domain_mask),
+    ):
+        if tuple(tensor.shape) != tuple(target_continuous.shape):
+            raise ValueError(
+                '{} shape {} does not match target {}'.format(
+                    name, tuple(tensor.shape), tuple(target_continuous.shape)
+                )
+            )
+    if target_class.dtype != torch.long:
+        raise TypeError('target_class must have dtype torch.long')
+    if domain_mask.dtype != torch.bool:
+        raise TypeError('mask must have dtype torch.bool')
+    if tuple(bin_centers.shape) != (target_continuous.shape[0], num_classes):
+        raise ValueError(
+            'bin_centers shape {} must be ({}, {})'.format(
+                tuple(bin_centers.shape), target_continuous.shape[0], num_classes
+            )
+        )
+    if input_data.shape[0] != target_continuous.shape[0]:
+        raise ValueError('Input and target batch sizes do not match')
+    return (
+        input_data,
+        target_continuous,
+        target_class,
+        target_center,
+        target_residual,
+        bin_centers,
+        domain_mask,
+    )
 
 
 def pad_hw_to_multiple(x, multiple=16, mode='replicate'):
@@ -244,89 +332,6 @@ def crop_model_output(output, h_slice, w_slice):
     if h_slice is None or w_slice is None:
         return output
     return output[..., h_slice, w_slice]
-
-
-# def continuous_to_discrete(target_continuous, thresholds=[0.02, 0.08, 0.15]):
-#     target_discrete = torch.zeros_like(target_continuous, dtype=torch.long)
-#     target_discrete[target_continuous >= thresholds[0]] = 1
-#     target_discrete[target_continuous >= thresholds[1]] = 2
-#     target_discrete[target_continuous >= thresholds[2]] = 3
-#     if target_discrete.dim() >= 2 and target_discrete.shape[1] == 1:
-#         target_discrete = target_discrete.squeeze(1)
-#     return target_discrete
-
-def continuous_to_discrete(target_continuous, thresholds=None):
-    if thresholds is None:
-        thresholds = getattr(args, 'cls_thresholds', [0.1, 0.4, 0.7])
-    target_discrete = torch.zeros_like(target_continuous, dtype=torch.long)
-    B = target_continuous.shape[0]
-
-    for i in range(B):
-        max_val = target_continuous[i].max().clamp(min=1e-8)
-        for class_idx, threshold in enumerate(thresholds, start=1):
-            target_discrete[i, target_continuous[i] >= threshold * max_val] = class_idx
-
-    if target_discrete.dim() >= 2 and target_discrete.shape[1] == 1:
-        target_discrete = target_discrete.squeeze(1)
-
-    return target_discrete
-
-
-def compute_bin_centers(target_continuous, thresholds=None):
-    if thresholds is None:
-        thresholds = getattr(args, 'cls_thresholds', [0.1, 0.4, 0.7])
-    B = target_continuous.shape[0]
-    max_vals = target_continuous.reshape(B, -1).max(dim=1).values.clamp(min=1e-8)
-    threshold_ratios = torch.tensor(thresholds, device=target_continuous.device, dtype=target_continuous.dtype)
-    abs_thresholds = max_vals.unsqueeze(1) * threshold_ratios.unsqueeze(0)
-
-    left_edges = torch.cat([torch.zeros((B, 1), device=target_continuous.device, dtype=target_continuous.dtype), abs_thresholds], dim=1)
-    right_edges = torch.cat([abs_thresholds, max_vals.unsqueeze(1)], dim=1)
-    return 0.5 * (left_edges + right_edges)
-
-
-def labels_to_centers(labels, bin_centers):
-    labels_safe = labels.clamp(min=0, max=bin_centers.shape[1] - 1)
-    B = labels_safe.shape[0]
-    flat_labels = labels_safe.reshape(B, -1)
-    flat_centers = torch.gather(bin_centers, 1, flat_labels)
-    centers = flat_centers.reshape(labels_safe.shape).unsqueeze(1)
-    return centers
-
-
-def select_target_channel(target):
-    if target.dim() >= 2 and target.shape[1] > 1:
-        channel_idx = int(getattr(args, 'target_channel', 0))
-        channel_idx = max(0, min(channel_idx, target.shape[1] - 1))
-        return target[:, channel_idx:channel_idx + 1, ...]
-    return target
-
-
-def apply_ignore_index_with_mask(target_discrete, domain_mask):
-    if domain_mask is None:
-        mask_bool = torch.ones_like(target_discrete, dtype=torch.bool)
-    else:
-        mask_bool = domain_mask.to(device=target_discrete.device).bool()
-        if mask_bool.dim() == target_discrete.dim() + 1:
-            if mask_bool.shape[1] != 1:
-                raise ValueError('Mask channel dimension must be 1, got {}'.format(mask_bool.shape))
-            mask_bool = mask_bool.squeeze(1)
-        if mask_bool.dim() != target_discrete.dim():
-            raise ValueError(
-                'Mask shape {} is incompatible with target shape {}'.format(
-                    tuple(mask_bool.shape), tuple(target_discrete.shape)
-                )
-            )
-        if mask_bool.shape[0] == 1 and target_discrete.shape[0] > 1:
-            mask_bool = mask_bool.expand(target_discrete.shape[0], *mask_bool.shape[1:])
-        if tuple(mask_bool.shape) != tuple(target_discrete.shape):
-            raise ValueError(
-                'Mask shape {} does not match target shape {}'.format(
-                    tuple(mask_bool.shape), tuple(target_discrete.shape)
-                )
-            )
-    target_discrete[~mask_bool] = -100
-    return target_discrete, mask_bool
 
 
 def compute_gradient_loss(output, target, mask=None):
@@ -377,26 +382,28 @@ def test(epoch):#epoch is a number
     correct_pixels = 0
     total_valid_pixels = 0
     for batch_idx, batch in enumerate(test_loader):
-        input, target, domain_mask = unpack_data_batch(batch)
-        input, target = input.to(device), target.to(device)
-        if domain_mask is not None:
-            domain_mask = domain_mask.to(device)
+        (
+            input,
+            target_continuous,
+            target_discrete_ce,
+            _,
+            target_residual,
+            bin_centers,
+            domain_mask,
+        ) = validate_hybrid_batch(batch)
+        input = input.to(device)
+        target_continuous = target_continuous.to(device)
+        target_discrete_ce = target_discrete_ce.to(device)
+        target_residual = target_residual.to(device)
+        bin_centers = bin_centers.to(device)
+        domain_mask = domain_mask.to(device)
         input_padded, h_slice, w_slice = maybe_pad_model_input(input)
         output_padded = model(input_padded)
         output = crop_model_output(output_padded, h_slice, w_slice)
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]
-        target_continuous = select_target_channel(target)
-
-        target_discrete = continuous_to_discrete(target_continuous)
-        bin_centers = compute_bin_centers(target_continuous)
-        target_center = labels_to_centers(target_discrete, bin_centers)
-        target_residual = target_continuous - target_center
-        target_discrete_ce = target_discrete.clone()
-        target_discrete_ce, domain_mask_bool = apply_ignore_index_with_mask(
-            target_discrete_ce, domain_mask
-        )
+        domain_mask_bool = domain_mask.squeeze(1)
 
         # Soft-argmax center for smoother gradient supervision field
         probs = F.softmax(out_class, dim=1)
@@ -488,10 +495,22 @@ def train(epoch):
     correct_pixels = 0
     total_valid_pixels = 0
     for _, batch in enumerate(train_loader):
-        input, target, domain_mask = unpack_data_batch(batch)
-        input, target = input.to(device), target.to(device)
-        if domain_mask is not None:
-            domain_mask = domain_mask.to(device)
+        (
+            input,
+            target_continuous,
+            target_discrete_ce,
+            target_center,
+            target_residual,
+            bin_centers,
+            domain_mask,
+        ) = validate_hybrid_batch(batch)
+        input = input.to(device)
+        target_continuous = target_continuous.to(device)
+        target_discrete_ce = target_discrete_ce.to(device)
+        target_center = target_center.to(device)
+        target_residual = target_residual.to(device)
+        bin_centers = bin_centers.to(device)
+        domain_mask = domain_mask.to(device)
         model.zero_grad()
         input_padded, h_slice, w_slice = maybe_pad_model_input(input)
         output_padded = model(input_padded)
@@ -499,16 +518,7 @@ def train(epoch):
 
         out_class = output[:, :num_classes, ...]
         out_reg = output[:, num_classes:num_classes + 1, ...]
-        target_continuous = select_target_channel(target)
-
-        target_discrete = continuous_to_discrete(target_continuous)
-        bin_centers = compute_bin_centers(target_continuous)
-        target_center = labels_to_centers(target_discrete, bin_centers)
-        target_residual = target_continuous - target_center
-        target_discrete_ce = target_discrete.clone()
-        target_discrete_ce, domain_mask_bool = apply_ignore_index_with_mask(
-            target_discrete_ce, domain_mask
-        )
+        domain_mask_bool = domain_mask.squeeze(1)
 
         loss_cls = criterion_ce(out_class, target_discrete_ce)
         domain_mask_reg_bool = domain_mask_bool.unsqueeze(1).expand_as(out_reg)

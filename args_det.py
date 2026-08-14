@@ -4,6 +4,7 @@ import json
 import random
 from pprint import pprint
 from utils.misc import mkdirs
+from utils.hybrid_bins import DEFAULT_CLS_THRESHOLDS, validate_cls_thresholds
 
 # always uses cuda if avaliable
 
@@ -45,7 +46,7 @@ class Parser(argparse.ArgumentParser):
         self.add_argument('--lambda-grad', type=float, default=2.0, help='weight for gradient loss')
         self.add_argument('--num-classes', type=int, default=5, help='number of classes for classification head')
         self.add_argument('--class-weights', nargs='+', type=float, default=[1.0, 2.0, 4.0, 8.0, 16.0], help='class weights for CE loss')
-        self.add_argument('--cls-thresholds', nargs='+', type=float, default=[0.05, 0.3, 0.55, 0.68], help='thresholds to convert continuous target into discrete labels')
+        self.add_argument('--cls-thresholds', nargs='+', type=float, default=list(DEFAULT_CLS_THRESHOLDS), help='thresholds to convert continuous target into discrete labels')
         self.add_argument('--lambda-reg', type=float, default=5.0, help='weight for regression L1 branch in hybrid loss')
         self.add_argument('--target-channel', type=int, default=0, help='which target channel to use for hybrid target when target has multiple channels')
         
@@ -74,6 +75,7 @@ class Parser(argparse.ArgumentParser):
 
         if args.num_classes < 2:
             raise ValueError('`--num-classes` must be >= 2')
+        args.cls_thresholds = list(validate_cls_thresholds(args.cls_thresholds))
         if len(args.class_weights) != args.num_classes:
             raise ValueError('`--class-weights` length must equal `--num-classes`')
         if len(args.cls_thresholds) != args.num_classes - 1:

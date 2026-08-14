@@ -4,6 +4,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset, random_split
 
+from utils.hybrid_targets import build_hybrid_dataset
+
 
 def _reshape_to_5d(arr):
     if arr.ndim == 3:
@@ -140,12 +142,20 @@ def _prepare_mask(mask_data, n_samples, target_shape):
 
 def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
               align_input_to_output=True, shuff=True, combine_inputs=True,
-              test_batch_size=None, split_ratio=None, split_seed=None):
+              test_batch_size=None, split_ratio=None, split_seed=None,
+              prepare_hybrid_targets=False, cls_thresholds=None,
+              num_classes=None, target_channel=0, ignore_index=-100,
+              center_max_source="target", center_max_value=1.0,
+              bin_center_ratios=None):
     """Load 3D fields, applying file-declared normalization and domain masks.
 
-    The returned dataset yields ``(input, output, mask)``. The mask is always
-    boolean with shape ``(1, D, H, W)`` per sample. Files without a mask remain
-    usable and receive an all-valid mask.
+    Raw HDF5 arrays are first copied into memory. File-declared normalization,
+    mask alignment and optional hybrid-target preparation then happen before a
+    DataLoader is created.
+
+    With ``prepare_hybrid_targets=False`` the dataset yields the legacy
+    ``(input, output, mask)`` tuple. With it enabled, each sample is a dict whose
+    target fields are ready for the loss calculation.
     """
     with h5py.File(data_dir, "r") as h5_file:
         dataset_names = ("input", "output", "sensor_input", "spatial_input")
@@ -243,7 +253,25 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
             )
 
     kwargs = {"num_workers": 4, "pin_memory": True} if torch.cuda.is_available() else {}
-    dataset = TensorDataset(x_tensor, y_tensor, mask_tensor)
+    if prepare_hybrid_targets:
+        preprocess_kwargs = {
+            "num_classes": num_classes,
+            "target_channel": target_channel,
+            "ignore_index": ignore_index,
+            "center_max_source": center_max_source,
+            "center_max_value": center_max_value,
+            "bin_center_ratios": bin_center_ratios,
+        }
+        if cls_thresholds is not None:
+            preprocess_kwargs["cls_thresholds"] = cls_thresholds
+        dataset = build_hybrid_dataset(
+            x_tensor,
+            y_tensor,
+            mask=mask_tensor,
+            **preprocess_kwargs
+        )
+    else:
+        dataset = TensorDataset(x_tensor, y_tensor, mask_tensor)
 
     y_data_mean = np.mean(y_data, axis=0)
     stats = {
@@ -251,6 +279,7 @@ def load_data(data_dir, batch_size, input_key=None, prefer_sensor_input=False,
         "y_var": np.sum((y_data - y_data_mean) ** 2),
         "concentration_normalization": normalization_mode,
         "mask_shape": tuple(mask_tensor.shape[2:]),
+        "hybrid_targets_prepared": bool(prepare_hybrid_targets),
     }
 
     if split_ratio is not None:
