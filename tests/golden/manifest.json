@@ -1,0 +1,4815 @@
+{
+  "generated_by": "tests/export_golden.py",
+  "torch_version": "2.13.0+cpu",
+  "numpy_version": "2.5.2",
+  "default_tol": 1e-05,
+  "comparison": "|a-b| <= tol + tol*|b|",
+  "layer_order": [
+    "op",
+    "mask/geom",
+    "phys",
+    "trans",
+    "data/metrics",
+    "model",
+    "step"
+  ],
+  "note": "按层从底往上验收：下层对不上时，上层的偏差没有诊断意义",
+  "entries": [
+    {
+      "name": "op/input",
+      "shape": [
+        2,
+        3,
+        17,
+        19
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "所有算子测试共用的输入场"
+    },
+    {
+      "name": "op/kernel_x",
+      "shape": [
+        1,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "x 方向中心差分核"
+    },
+    {
+      "name": "op/kernel_y",
+      "shape": [
+        1,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "y 方向中心差分核"
+    },
+    {
+      "name": "op/conv_replicate_x",
+      "shape": [
+        2,
+        3,
+        17,
+        19
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "replicate padding + 3x3 卷积（x 向）。零填充会在边界造出虚假巨梯度，必须逐元素对上"
+    },
+    {
+      "name": "op/conv_replicate_y",
+      "shape": [
+        2,
+        3,
+        17,
+        19
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "replicate padding（y 向）"
+    },
+    {
+      "name": "op/grad_x",
+      "shape": [
+        2,
+        3,
+        17,
+        19
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "一阶中心差分 d/dx，各向异性网格"
+    },
+    {
+      "name": "op/grad_y",
+      "shape": [
+        2,
+        3,
+        17,
+        19
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "一阶中心差分 d/dy"
+    },
+    {
+      "name": "op/laplacian",
+      "shape": [
+        2,
+        3,
+        17,
+        19
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "五点 Laplacian，dx≠dy 时分别缩放"
+    },
+    {
+      "name": "op/grad_x_1ch",
+      "shape": [
+        2,
+        1,
+        17,
+        19
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "单通道分支（groups 卷积不生效的那条路）"
+    },
+    {
+      "name": "mask/all_ones/src",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀前的掩码"
+    },
+    {
+      "name": "mask/all_ones/erode1",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 1 圈。图像边界必须当作域外——旧实现用 max_pool 的 -inf 补边，贴边格点腐蚀不掉，差分模板伸到图像外"
+    },
+    {
+      "name": "mask/all_ones/erode2",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 2 圈"
+    },
+    {
+      "name": "mask/band_touching_edges/src",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀前的掩码"
+    },
+    {
+      "name": "mask/band_touching_edges/erode1",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 1 圈。图像边界必须当作域外——旧实现用 max_pool 的 -inf 补边，贴边格点腐蚀不掉，差分模板伸到图像外"
+    },
+    {
+      "name": "mask/band_touching_edges/erode2",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 2 圈"
+    },
+    {
+      "name": "mask/interior_block/src",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀前的掩码"
+    },
+    {
+      "name": "mask/interior_block/erode1",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 1 圈。图像边界必须当作域外——旧实现用 max_pool 的 -inf 补边，贴边格点腐蚀不掉，差分模板伸到图像外"
+    },
+    {
+      "name": "mask/interior_block/erode2",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 2 圈"
+    },
+    {
+      "name": "mask/single_pixel/src",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀前的掩码"
+    },
+    {
+      "name": "mask/single_pixel/erode1",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 1 圈。图像边界必须当作域外——旧实现用 max_pool 的 -inf 补边，贴边格点腐蚀不掉，差分模板伸到图像外"
+    },
+    {
+      "name": "mask/single_pixel/erode2",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 2 圈"
+    },
+    {
+      "name": "mask/checker/src",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀前的掩码"
+    },
+    {
+      "name": "mask/checker/erode1",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 1 圈。图像边界必须当作域外——旧实现用 max_pool 的 -inf 补边，贴边格点腐蚀不掉，差分模板伸到图像外"
+    },
+    {
+      "name": "mask/checker/erode2",
+      "shape": [
+        1,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀 2 圈"
+    },
+    {
+      "name": "geom/rect_65x65",
+      "shape": [
+        65,
+        65
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "默认 T 型几何按归一化比例生成，任意分辨率覆盖同一物理区域"
+    },
+    {
+      "name": "geom/rect_137x137",
+      "shape": [
+        137,
+        137
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "默认 T 型几何按归一化比例生成，任意分辨率覆盖同一物理区域"
+    },
+    {
+      "name": "geom/rect_96x240",
+      "shape": [
+        96,
+        240
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "默认 T 型几何按归一化比例生成，任意分辨率覆盖同一物理区域"
+    },
+    {
+      "name": "geom/raster_src",
+      "shape": [
+        40,
+        100
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "车站平面栅格掩码原图"
+    },
+    {
+      "name": "geom/raster_40x100",
+      "shape": [
+        40,
+        100
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "栅格掩码最近邻重采样（放大/等尺/缩小三种情况）"
+    },
+    {
+      "name": "geom/raster_80x200",
+      "shape": [
+        80,
+        200
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "栅格掩码最近邻重采样（放大/等尺/缩小三种情况）"
+    },
+    {
+      "name": "geom/raster_20x50",
+      "shape": [
+        20,
+        50
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "栅格掩码最近邻重采样（放大/等尺/缩小三种情况）"
+    },
+    {
+      "name": "mask/masked_mean_input",
+      "shape": [
+        2,
+        1,
+        9,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "masked_mean 输入"
+    },
+    {
+      "name": "mask/masked_mean_banded",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "掩码内均值，分母是掩码内像素数"
+    },
+    {
+      "name": "mask/masked_mean_none",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "mask=None 时退化成普通 mean"
+    },
+    {
+      "name": "phys/fields_pvvt",
+      "shape": [
+        2,
+        4,
+        24,
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "(P,Vx,Vy,T) 四通道输入场"
+    },
+    {
+      "name": "phys/mask",
+      "shape": [
+        1,
+        1,
+        24,
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "计算域掩码（左右贴边）"
+    },
+    {
+      "name": "phys/interior",
+      "shape": [
+        1,
+        1,
+        24,
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "腐蚀后的物理残差评估域"
+    },
+    {
+      "name": "phys/divergence_field",
+      "shape": [
+        2,
+        1,
+        24,
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "div(v) 逐点场"
+    },
+    {
+      "name": "phys/div_loss",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "连续性方程残差均方"
+    },
+    {
+      "name": "phys/ns_loss",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "稳态 N-S 动量残差（rho=1.3, nu=7e-3）"
+    },
+    {
+      "name": "phys/smooth_loss",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "平滑项"
+    },
+    {
+      "name": "phys/target",
+      "shape": [
+        2,
+        4,
+        24,
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "重建损失的目标场"
+    },
+    {
+      "name": "phys/recon_weighted",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "加权重建损失 0.6*MSE + 0.4*L1，分母是掩码内像素数"
+    },
+    {
+      "name": "phys/recon_plain",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "MSE + L1"
+    },
+    {
+      "name": "phys/y_min",
+      "shape": [
+        4
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "逐通道最小值"
+    },
+    {
+      "name": "phys/y_max",
+      "shape": [
+        4
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "逐通道最大值"
+    },
+    {
+      "name": "phys/denormalized",
+      "shape": [
+        2,
+        4,
+        24,
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "[0,1] -> 有量纲。逐通道缩放，Vx/Vy 尺度不同，在归一化空间求 div 是错的"
+    },
+    {
+      "name": "phys/combined_flow_total",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "flow 任务组合损失总值"
+    },
+    {
+      "name": "phys/combined_flow_base",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "flow 组合损失分项 base（含 epoch 斜坡）"
+    },
+    {
+      "name": "phys/combined_flow_div",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "flow 组合损失分项 div（含 epoch 斜坡）"
+    },
+    {
+      "name": "phys/combined_flow_ns",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "flow 组合损失分项 ns（含 epoch 斜坡）"
+    },
+    {
+      "name": "phys/combined_flow_smooth",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "flow 组合损失分项 smooth（含 epoch 斜坡）"
+    },
+    {
+      "name": "phys/combined_flow_w_div",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "flow 组合损失分项 w_div（含 epoch 斜坡）"
+    },
+    {
+      "name": "phys/combined_flow_w_ns",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "flow 组合损失分项 w_ns（含 epoch 斜坡）"
+    },
+    {
+      "name": "phys/combined_flow_w_smooth",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "flow 组合损失分项 w_smooth（含 epoch 斜坡）"
+    },
+    {
+      "name": "phys/nsweight0_ns",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "--ns-weight=0 时动量残差应为 0"
+    },
+    {
+      "name": "phys/nsweight0_div",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "关掉动量项不影响散度项"
+    },
+    {
+      "name": "phys/report_div_rms",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "诊断报告 div_rms"
+    },
+    {
+      "name": "phys/report_ns_rms",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "诊断报告 ns_rms"
+    },
+    {
+      "name": "trans/c",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "浓度场"
+    },
+    {
+      "name": "trans/vx",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "速度 x（来自输入通道，不是网络输出）"
+    },
+    {
+      "name": "trans/vy",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "速度 y"
+    },
+    {
+      "name": "trans/residual_steady",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "稳态残差 u·∇C - D∇²C"
+    },
+    {
+      "name": "trans/dcdt",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "时间导数输入"
+    },
+    {
+      "name": "trans/residual_transient",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "瞬态残差，含 ∂C/∂t"
+    },
+    {
+      "name": "trans/source",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "源项 S"
+    },
+    {
+      "name": "trans/residual_with_source",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "含源项的完整残差"
+    },
+    {
+      "name": "trans/loss",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "对流扩散残差均方"
+    },
+    {
+      "name": "trans/central_dt",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "中心时间差分，分母是 2Δt"
+    },
+    {
+      "name": "trans/combined_total",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "dispersion 组合损失总值"
+    },
+    {
+      "name": "trans/combined_base",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "dispersion 分项 base（div/ns 应为 0）"
+    },
+    {
+      "name": "trans/combined_advdiff",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "dispersion 分项 advdiff（div/ns 应为 0）"
+    },
+    {
+      "name": "trans/combined_smooth",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "dispersion 分项 smooth（div/ns 应为 0）"
+    },
+    {
+      "name": "trans/combined_div",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "dispersion 分项 div（div/ns 应为 0）"
+    },
+    {
+      "name": "trans/combined_ns",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "dispersion 分项 ns（div/ns 应为 0）"
+    },
+    {
+      "name": "data/raw",
+      "shape": [
+        6,
+        3,
+        8,
+        10
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "原始有量纲场"
+    },
+    {
+      "name": "data/y_min",
+      "shape": [
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "逐通道最小值（全量扫描，不是只取前 N 个）"
+    },
+    {
+      "name": "data/y_max",
+      "shape": [
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "逐通道最大值"
+    },
+    {
+      "name": "data/normalized",
+      "shape": [
+        6,
+        3,
+        8,
+        10
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "逐通道 min-max 归一化到 [0,1]，不 clamp"
+    },
+    {
+      "name": "data/roundtrip",
+      "shape": [
+        6,
+        3,
+        8,
+        10
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "反归一化应还原原值"
+    },
+    {
+      "name": "data/split_100_0.2_1_train",
+      "shape": [
+        80
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练下标（固定 seed 可复现，与验证集互不重叠）"
+    },
+    {
+      "name": "data/split_100_0.2_1_val",
+      "shape": [
+        20
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "验证下标"
+    },
+    {
+      "name": "data/split_37_0.3_7_train",
+      "shape": [
+        26
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练下标（固定 seed 可复现，与验证集互不重叠）"
+    },
+    {
+      "name": "data/split_37_0.3_7_val",
+      "shape": [
+        11
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "验证下标"
+    },
+    {
+      "name": "data/split_5_0.5_3_train",
+      "shape": [
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练下标（固定 seed 可复现，与验证集互不重叠）"
+    },
+    {
+      "name": "data/split_5_0.5_3_val",
+      "shape": [
+        2
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "验证下标"
+    },
+    {
+      "name": "metrics/out",
+      "shape": [
+        4,
+        3,
+        12,
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "指标累计器输入"
+    },
+    {
+      "name": "metrics/tgt",
+      "shape": [
+        4,
+        3,
+        12,
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "指标累计器目标"
+    },
+    {
+      "name": "metrics/mask",
+      "shape": [
+        1,
+        1,
+        12,
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "指标只统计掩码内像素"
+    },
+    {
+      "name": "metrics/r2",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "整体 R²"
+    },
+    {
+      "name": "metrics/rmse",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "整体 RMSE"
+    },
+    {
+      "name": "metrics/r2_per_channel",
+      "shape": [
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "分通道 R²"
+    },
+    {
+      "name": "m3blk/param/in_conv.weight",
+      "shape": [
+        8,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/enc_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/enc_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/enc_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/enc_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/enc_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/enc_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_downs.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_downs.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_downs.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_downs.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_downs.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_downs.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.attn.in_proj_weight",
+      "shape": [
+        24,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.attn.in_proj_bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.attn.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.attn.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.mlp.0.weight",
+      "shape": [
+        32,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.mlp.0.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.mlp.3.weight",
+      "shape": [
+        8,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/transformer_bottleneck.mlp.3.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.1.denselayer1.norm1.weight",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.1.denselayer1.norm1.bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.1.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        24,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.1.denselayer2.norm1.weight",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.1.denselayer2.norm1.bias",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/dec_blocks.1.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        28,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_ups.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_ups.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_ups.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_ups.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_ups.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/trans_ups.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/spatial_attention.conv.weight",
+      "shape": [
+        1,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/last_trans_up.norm1.weight",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/last_trans_up.norm1.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/last_trans_up.conv1.weight",
+      "shape": [
+        16,
+        32,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/last_trans_up.norm2.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/last_trans_up.norm2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/param/last_trans_up.conv2.weight",
+      "shape": [
+        3,
+        16,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m3blk/input",
+      "shape": [
+        2,
+        2,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 前向输入"
+    },
+    {
+      "name": "m3blk/output",
+      "shape": [
+        2,
+        3,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m3blk 前向输出。逐元素对上才说明 DenseBlock/Transition/skip/Transformer 瓶颈/位置编码全部一致"
+    },
+    {
+      "name": "m5blk/param/in_conv.weight",
+      "shape": [
+        8,
+        3,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.1.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.1.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.1.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.1.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.1.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/enc_blocks.1.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.1.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.1.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.1.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.1.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.1.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_downs.1.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.attn.in_proj_weight",
+      "shape": [
+        24,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.attn.in_proj_bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.attn.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.attn.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.mlp.0.weight",
+      "shape": [
+        32,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.mlp.0.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.mlp.3.weight",
+      "shape": [
+        8,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/transformer_bottleneck.mlp.3.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.1.denselayer1.norm1.weight",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.1.denselayer1.norm1.bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.1.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        24,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.1.denselayer2.norm1.weight",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.1.denselayer2.norm1.bias",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.1.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        28,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.2.denselayer1.norm1.weight",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.2.denselayer1.norm1.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.2.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        32,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.2.denselayer2.norm1.weight",
+      "shape": [
+        36
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.2.denselayer2.norm1.bias",
+      "shape": [
+        36
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/dec_blocks.2.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        36,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.1.norm1.weight",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.1.norm1.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.1.conv1.weight",
+      "shape": [
+        16,
+        32,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.1.norm2.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.1.norm2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/trans_ups.1.conv2.weight",
+      "shape": [
+        16,
+        16,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/spatial_attention.conv.weight",
+      "shape": [
+        1,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/last_trans_up.norm1.weight",
+      "shape": [
+        40
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/last_trans_up.norm1.bias",
+      "shape": [
+        40
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/last_trans_up.conv1.weight",
+      "shape": [
+        20,
+        40,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/last_trans_up.norm2.weight",
+      "shape": [
+        20
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/last_trans_up.norm2.bias",
+      "shape": [
+        20
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/param/last_trans_up.conv2.weight",
+      "shape": [
+        4,
+        20,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m5blk/input",
+      "shape": [
+        2,
+        3,
+        40,
+        40
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 前向输入"
+    },
+    {
+      "name": "m5blk/output",
+      "shape": [
+        2,
+        4,
+        40,
+        40
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m5blk 前向输出。逐元素对上才说明 DenseBlock/Transition/skip/Transformer 瓶颈/位置编码全部一致"
+    },
+    {
+      "name": "m_odd/param/in_conv.weight",
+      "shape": [
+        8,
+        1,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/enc_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/enc_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/enc_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/enc_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/enc_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/enc_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_downs.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_downs.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_downs.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_downs.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_downs.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_downs.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.attn.in_proj_weight",
+      "shape": [
+        24,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.attn.in_proj_bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.attn.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.attn.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.mlp.0.weight",
+      "shape": [
+        32,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.mlp.0.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.mlp.3.weight",
+      "shape": [
+        8,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/transformer_bottleneck.mlp.3.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.1.denselayer1.norm1.weight",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.1.denselayer1.norm1.bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.1.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        24,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.1.denselayer2.norm1.weight",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.1.denselayer2.norm1.bias",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/dec_blocks.1.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        28,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_ups.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_ups.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_ups.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_ups.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_ups.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/trans_ups.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/spatial_attention.conv.weight",
+      "shape": [
+        1,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/last_trans_up.norm1.weight",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/last_trans_up.norm1.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/last_trans_up.conv1.weight",
+      "shape": [
+        16,
+        32,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/last_trans_up.norm2.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/last_trans_up.norm2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/param/last_trans_up.conv2.weight",
+      "shape": [
+        1,
+        16,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 的固定权重，Rust 侧必须读这份而不是自己初始化"
+    },
+    {
+      "name": "m_odd/input",
+      "shape": [
+        1,
+        1,
+        33,
+        29
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 前向输入"
+    },
+    {
+      "name": "m_odd/output",
+      "shape": [
+        1,
+        1,
+        33,
+        29
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "m_odd 前向输出。逐元素对上才说明 DenseBlock/Transition/skip/Transformer 瓶颈/位置编码全部一致"
+    },
+    {
+      "name": "m3d/param/in_conv.weight",
+      "shape": [
+        8,
+        2,
+        1,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/enc_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/enc_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/enc_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/enc_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/enc_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/enc_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_downs.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_downs.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_downs.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_downs.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_downs.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_downs.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.attn.in_proj_weight",
+      "shape": [
+        24,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.attn.in_proj_bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.attn.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.attn.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.mlp.0.weight",
+      "shape": [
+        32,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.mlp.0.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.mlp.3.weight",
+      "shape": [
+        8,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/transformer_bottleneck.mlp.3.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.1.denselayer1.norm1.weight",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.1.denselayer1.norm1.bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.1.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        24,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.1.denselayer2.norm1.weight",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.1.denselayer2.norm1.bias",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/dec_blocks.1.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        28,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_ups.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_ups.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_ups.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_ups.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_ups.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/trans_ups.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/spatial_attention.conv.weight",
+      "shape": [
+        1,
+        2,
+        7,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/last_trans_up.norm1.weight",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/last_trans_up.norm1.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/last_trans_up.conv1.weight",
+      "shape": [
+        16,
+        32,
+        1,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/last_trans_up.norm2.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/last_trans_up.norm2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/param/last_trans_up.conv2.weight",
+      "shape": [
+        3,
+        16,
+        1,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 模型固定权重"
+    },
+    {
+      "name": "m3d/input",
+      "shape": [
+        1,
+        2,
+        2,
+        24,
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 前向输入 (B,C,D,H,W)"
+    },
+    {
+      "name": "m3d/output",
+      "shape": [
+        1,
+        3,
+        2,
+        24,
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 前向输出"
+    },
+    {
+      "name": "step/before/param/in_conv.weight",
+      "shape": [
+        8,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/enc_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/enc_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/enc_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/enc_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/enc_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/enc_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_downs.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_downs.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_downs.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_downs.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_downs.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_downs.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.attn.in_proj_weight",
+      "shape": [
+        24,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.attn.in_proj_bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.attn.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.attn.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.mlp.0.weight",
+      "shape": [
+        32,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.mlp.0.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.mlp.3.weight",
+      "shape": [
+        8,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/transformer_bottleneck.mlp.3.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.1.denselayer1.norm1.weight",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.1.denselayer1.norm1.bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.1.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        24,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.1.denselayer2.norm1.weight",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.1.denselayer2.norm1.bias",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/dec_blocks.1.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        28,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_ups.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_ups.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_ups.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_ups.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_ups.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/trans_ups.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/spatial_attention.conv.weight",
+      "shape": [
+        1,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/last_trans_up.norm1.weight",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/last_trans_up.norm1.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/last_trans_up.conv1.weight",
+      "shape": [
+        16,
+        32,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/last_trans_up.norm2.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/last_trans_up.norm2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/before/param/last_trans_up.conv2.weight",
+      "shape": [
+        3,
+        16,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练前参数"
+    },
+    {
+      "name": "step/input",
+      "shape": [
+        2,
+        2,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练步输入"
+    },
+    {
+      "name": "step/target",
+      "shape": [
+        2,
+        3,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练步目标"
+    },
+    {
+      "name": "step/mask",
+      "shape": [
+        1,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练步掩码"
+    },
+    {
+      "name": "step/forward",
+      "shape": [
+        2,
+        3,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练模式下的前向输出（BatchNorm 走 batch 统计）"
+    },
+    {
+      "name": "step/loss",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "训练步总损失"
+    },
+    {
+      "name": "step/grad/in_conv.weight",
+      "shape": [
+        8,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/enc_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/enc_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/enc_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/enc_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/enc_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/enc_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_downs.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_downs.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_downs.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_downs.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_downs.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_downs.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.attn.in_proj_weight",
+      "shape": [
+        24,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.attn.in_proj_bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.attn.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.attn.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.mlp.0.weight",
+      "shape": [
+        32,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.mlp.0.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.mlp.3.weight",
+      "shape": [
+        8,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/transformer_bottleneck.mlp.3.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.1.denselayer1.norm1.weight",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.1.denselayer1.norm1.bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.1.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        24,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.1.denselayer2.norm1.weight",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.1.denselayer2.norm1.bias",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/dec_blocks.1.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        28,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_ups.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_ups.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_ups.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_ups.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_ups.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/trans_ups.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/spatial_attention.conv.weight",
+      "shape": [
+        1,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/last_trans_up.norm1.weight",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/last_trans_up.norm1.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/last_trans_up.conv1.weight",
+      "shape": [
+        16,
+        32,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/last_trans_up.norm2.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/last_trans_up.norm2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/grad/last_trans_up.conv2.weight",
+      "shape": [
+        3,
+        16,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "梯度裁剪后的梯度"
+    },
+    {
+      "name": "step/after/param/in_conv.weight",
+      "shape": [
+        8,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/enc_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/enc_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/enc_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/enc_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/enc_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/enc_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_downs.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_downs.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_downs.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_downs.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_downs.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_downs.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.attn.in_proj_weight",
+      "shape": [
+        24,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.attn.in_proj_bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.attn.out_proj.weight",
+      "shape": [
+        8,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.attn.out_proj.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.mlp.0.weight",
+      "shape": [
+        32,
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.mlp.0.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.mlp.3.weight",
+      "shape": [
+        8,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/transformer_bottleneck.mlp.3.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.0.denselayer1.norm1.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.0.denselayer1.norm1.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.0.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.0.denselayer2.norm1.weight",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.0.denselayer2.norm1.bias",
+      "shape": [
+        12
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.0.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        12,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.1.denselayer1.norm1.weight",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.1.denselayer1.norm1.bias",
+      "shape": [
+        24
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.1.denselayer1.conv1.weight",
+      "shape": [
+        4,
+        24,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.1.denselayer2.norm1.weight",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.1.denselayer2.norm1.bias",
+      "shape": [
+        28
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/dec_blocks.1.denselayer2.conv1.weight",
+      "shape": [
+        4,
+        28,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_ups.0.norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_ups.0.norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_ups.0.conv1.weight",
+      "shape": [
+        8,
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_ups.0.norm2.weight",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_ups.0.norm2.bias",
+      "shape": [
+        8
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/trans_ups.0.conv2.weight",
+      "shape": [
+        8,
+        8,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/spatial_attention.conv.weight",
+      "shape": [
+        1,
+        2,
+        7,
+        7
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/last_trans_up.norm1.weight",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/last_trans_up.norm1.bias",
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/last_trans_up.conv1.weight",
+      "shape": [
+        16,
+        32,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/last_trans_up.norm2.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/last_trans_up.norm2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    },
+    {
+      "name": "step/after/param/last_trans_up.conv2.weight",
+      "shape": [
+        3,
+        16,
+        3,
+        3
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Adam 一步之后的参数"
+    }
+  ]
+}
