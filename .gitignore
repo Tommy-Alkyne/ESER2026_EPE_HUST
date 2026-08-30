@@ -111,3 +111,6 @@ experiments/*
 
 #jupyter notebooks
 *.ipynb
+#编辑器/工具产生的本地元数据
+.reasonix/
+.orca/

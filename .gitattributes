@@ -1,0 +1,20 @@
+# 统一换行符。旧仓库因为 CRLF/LF 混用，21 个源文件全部显示为 modified，
+# 而 git diff 显示改动 100% 是换行符（3067 增 / 3067 删）——code review 和
+# git blame 都被淹没。设定这条规则后，工作区按平台展开、仓库里统一存 LF。
+* text=auto eol=lf
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.sh   text eol=lf
+*.txt  text eol=lf
+*.json text eol=lf
+
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+*.hdf5 binary
+*.h5   binary
+*.pth  binary
+*.npz  binary
+*.png  binary
+*.pdf  binary
