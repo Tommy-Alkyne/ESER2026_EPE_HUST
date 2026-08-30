@@ -1,227 +1,240 @@
-"""
-Surrogate inference script: load a .pth checkpoint and predict on a
-specified HDF5 file, saving the outputs.
+"""脱机推理：加载 checkpoint，对给定 HDF5 做前向预测并保存结果。
 
-Usage example (3D, my_run_3d checkpoint, predict on 10243d.hdf5):
+用法
+----
+    python surrogate_predict.py \
+        --ckpt-file experiments/my_run/checkpoints/model_best.pth \
+        --data-file dataset/p_v_256.hdf5 \
+        --out-file experiments/my_run/pred.hdf5
 
-	python surrogate_predict.py \
-	  --ckpt-file ./experiments/my_run_3d/kle4225/ntrain512_blocks[3, 6, 3]_growth16_nif48_drop0.0_batch16_lr0.003_wd0.0005_epochs200/checkpoints/model_epoch100.pth \
-	  --data-file ./dataset/10243d.hdf5 \
-	  --ndim 3 \
-	  --batch-size 128 \
-	  --out-file ./experiments/my_run_3d/predictions_10243d_epoch100.pred.hdf5
-
-This script does not train; it only performs forward prediction.
+修复内容
+--------
+1. **2D 路径不再必崩**。旧版用 4 个关键字参数调 `load_data`，而 2D 版签名只有
+   `(data_dir, batch_size)` —— 一跑就 TypeError。现在两边签名统一。
+2. **输出反归一化回物理量纲**。旧版把 [0,1] 的归一化结果直接写盘，且没保存
+   min/max，下游根本无法还原成压力/速度，代理模型的实用价值归零。现在默认
+   写出有量纲结果，并把归一化统计量一并存进文件。
+3. **超参从 checkpoint 里读**，不再要求用户在命令行手工重复一遍（写错就静默
+   加载失败或形状对不上）。
+4. **T 掩码复用 utils/geometry**，不再是第二份硬编码像素坐标。
 """
 
 import argparse
-import os
 import json
-import torch
-import numpy as np
+import os
+
 import h5py
+import numpy as np
+import torch
+
+from utils.data_common import compute_output_stats, denormalize_array
+from utils.geometry import parse_geometry, t_mask_numpy
 
 
-def parse_args():
-	p = argparse.ArgumentParser(description="Surrogate inference: load .pth and predict on HDF5")
-	# Required inputs
-	p.add_argument('--ckpt-file', type=str, required=True, help='Path to checkpoint .pth file')
-	p.add_argument('--data-file', type=str, required=True, help='Path to HDF5 file with datasets: input/output')
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description='T 型管流场代理模型离线推理')
+    p.add_argument('--ckpt-file', type=str, required=True)
+    p.add_argument('--data-file', type=str, required=True)
+    p.add_argument('--out-file', type=str, default=None)
 
-	# Dimensionality and channels
-	p.add_argument('--ndim', type=int, default=None, choices=[2, 3], help='Data dimensionality (auto if omitted)')
-	p.add_argument('--nic', type=int, default=1, help='Number of input channels')
-	p.add_argument('--noc', type=int, default=3, help='Number of output channels')
+    p.add_argument('--ndim', type=int, default=None, choices=[2, 3],
+                   help='缺省从 checkpoint 或数据文件自动判断')
+    p.add_argument('--batch-size', type=int, default=64)
+    p.add_argument('--limit', type=int, default=None, help='只推理前 N 个样本')
+    p.add_argument('--device', type=str, default=None)
 
-	# Model hyperparameters (defaults match repo experiments)
-	p.add_argument('--blocks', type=str, default='[3, 6, 3]', help='Dense block layout as a Python list')
-	p.add_argument('--growth-rate', type=int, default=16)
-	p.add_argument('--init-features', type=int, default=48)
-	p.add_argument('--drop-rate', type=float, default=0.0)
-	p.add_argument('--bn-size', type=int, default=8)
-	p.add_argument('--bottleneck', action='store_true', default=False)
+    p.add_argument('--denormalize', dest='denormalize', action='store_true',
+                   default=True, help='输出有量纲物理场（默认）')
+    p.add_argument('--keep-normalized', dest='denormalize', action='store_false',
+                   help='保留 [0,1] 归一化输出')
+    p.add_argument('--apply-mask', dest='apply_mask', action='store_true',
+                   default=True, help='把 T 型域外置零（默认）')
+    p.add_argument('--no-mask', dest='apply_mask', action='store_false')
+    p.add_argument('--t-geometry', type=str, default=None)
+    p.add_argument('--input-key', type=str, default=None)
+    p.add_argument('--prefer-sensor-input', action='store_true', default=False)
 
-	# Inference options
-	p.add_argument('--batch-size', type=int, default=64)
-	p.add_argument('--limit', type=int, default=None, help='Limit number of samples to predict (debug)')
-	p.add_argument('--out-file', type=str, default=None, help='Output file (.hdf5 or .npz) to save predictions')
-	p.add_argument('--device', type=str, default=None, help='Device override, e.g. cuda:0 or cpu')
-
-	args = p.parse_args()
-
-	# Parse blocks string safely
-	try:
-		args.blocks = json.loads(args.blocks.replace("'", '"'))
-		if not isinstance(args.blocks, list):
-			raise ValueError
-	except Exception:
-		raise ValueError('--blocks must be a JSON-like list, e.g. "[3, 6, 3]"')
-
-	return args
+    # 只在 checkpoint 里缺少元信息时才需要手工指定
+    p.add_argument('--blocks', type=str, default=None)
+    p.add_argument('--growth-rate', type=int, default=None)
+    p.add_argument('--init-features', type=int, default=None)
+    p.add_argument('--drop-rate', type=float, default=None)
+    p.add_argument('--bn-size', type=int, default=None)
+    p.add_argument('--bottleneck', action='store_true', default=None)
+    return p.parse_args(argv)
 
 
-def _auto_detect_ndim(data_file):
-	with h5py.File(data_file, 'r') as f:
-		x = f['input'][()]
-	# 2D: (N, C, H, W); 3D: (N, C, D, H, W)
-	ndim = 3 if x.ndim == 5 else 2
-	return ndim, x.shape
+DEFAULT_HP = {
+    'blocks': [3, 6, 3], 'growth_rate': 16, 'init_features': 48,
+    'drop_rate': 0.0, 'bn_size': 8, 'bottleneck': False, 'num_heads': 4,
+    'attn_max_tokens': 8192, 'no_positional_encoding': False,
+    'channel_order': 'pvv',
+}
 
 
-def _build_model(args, device):
-	if args.ndim == 3:
-		from models.dense_ed_3d import DenseED as DenseED
-	else:
-		from models.dense_ed import DenseED
-	model = DenseED(
-		in_channels=args.nic,
-		out_channels=args.noc,
-		blocks=args.blocks,
-		growth_rate=args.growth_rate,
-		init_features=args.init_features,
-		drop_rate=args.drop_rate,
-		bn_size=args.bn_size,
-		bottleneck=args.bottleneck,
-		out_activation=None,
-		output_size=getattr(args, 'output_size', None) if args.ndim == 3 else None,
-	).to(device)
-	return model
+def _parse_blocks(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [int(v) for v in value]
+    try:
+        return [int(v) for v in json.loads(str(value).replace("'", '"'))]
+    except Exception:
+        return [int(t) for t in str(value).strip('[]()').split(',') if t.strip()]
 
 
-def _load_data(args):
-	# Use repo loaders to keep preprocessing consistent
-	if args.ndim == 3:
-		from utils.load_data_3d import load_data
-	else:
-		from utils.load_data import load_data
-	loader, stats = load_data(
-		args.data_file,
-		args.batch_size,
-		input_key=None,
-		prefer_sensor_input=False,
-		align_input_to_output=True,
-		shuff=False
-	)
-	return loader, stats
+def load_checkpoint(path, device):
+    """兼容新版自描述 checkpoint 与旧版裸 state_dict。"""
+    blob = torch.load(path, map_location=device, weights_only=False)
+    if isinstance(blob, dict) and 'model' in blob and isinstance(blob['model'], dict):
+        return blob['model'], blob.get('args', {}) or {}, blob.get('stats', None)
+    return blob, {}, None
 
 
-def main():
-	args = parse_args()
+def infer_channels(state, ckpt_args):
+    """从权重形状反推输入/输出通道数，兼容新旧命名。"""
+    nic = ckpt_args.get('nic')
+    noc = ckpt_args.get('noc')
+    for key, tensor in state.items():
+        if nic is None and key.endswith('in_conv.weight'):
+            nic = int(tensor.shape[1])
+        if noc is None and key.endswith('last_trans_up.conv2.weight'):
+            noc = int(tensor.shape[0])
+        if noc is None and key.endswith('LastTransUp.convT2.weight'):
+            noc = int(tensor.shape[1])   # ConvTranspose: (in, out, k, k)
+    if nic is None or noc is None:
+        raise RuntimeError('无法从 checkpoint 推断通道数，请检查文件是否完整')
+    return nic, noc
 
-	# Auto-detect dimensionality from file if not provided
-	if args.ndim is None:
-		args.ndim, in_shape = _auto_detect_ndim(args.data_file)
-	else:
-		_, in_shape = _auto_detect_ndim(args.data_file)
 
-	# Device
-	if args.device is not None:
-		device = torch.device(args.device)
-	else:
-		device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def detect_ndim(data_file, ckpt_args, override=None):
+    if override is not None:
+        return override
+    if ckpt_args.get('ndim'):
+        return int(ckpt_args['ndim'])
+    with h5py.File(data_file, 'r') as f:
+        return 3 if f['output'].ndim == 5 else 2
 
-	# Load checkpoint state early to align channels
-	state = torch.load(args.ckpt_file, map_location=device)
-	# 2D vs 3D checkpoints use different module names
-	if 'last_trans_up.conv2.weight' in state:
-		args.noc = state['last_trans_up.conv2.weight'].shape[0]
-	elif 'features.LastTransUp.convT2.weight' in state:
-		args.noc = state['features.LastTransUp.convT2.weight'].shape[1]
-	elif 'features.LastTransUp.conv2.weight' in state:
-		args.noc = state['features.LastTransUp.conv2.weight'].shape[0]
-	if 'in_conv.weight' in state:
-		args.nic = state['in_conv.weight'].shape[1]
-	elif 'features.In_conv.weight' in state:
-		args.nic = state['features.In_conv.weight'].shape[1]
 
-	# Load data
-	loader, stats = _load_data(args)
-	n_total = len(loader.dataset)
-	if args.limit is not None:
-		n_total = min(n_total, args.limit)
+def main(argv=None):
+    args = parse_args(argv)
+    device = torch.device(args.device) if args.device else \
+        torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-	# Align output size for 3D to match targets
-	if args.ndim == 3:
-		_, sample_y = loader.dataset[0]
-		args.output_size = tuple(sample_y.shape[-3:])
+    state, ckpt_args, ckpt_stats = load_checkpoint(args.ckpt_file, device)
+    ndim = detect_ndim(args.data_file, ckpt_args, args.ndim)
+    nic, noc = infer_channels(state, ckpt_args)
 
-	# Build and load model
-	model = _build_model(args, device)
-	model.load_state_dict(state)
-	model.eval()
+    hp = dict(DEFAULT_HP)
+    hp.update({k: v for k, v in ckpt_args.items() if k in hp and v is not None})
+    for key in ('growth_rate', 'init_features', 'drop_rate', 'bn_size'):
+        if getattr(args, key) is not None:
+            hp[key] = getattr(args, key)
+    if args.blocks is not None:
+        hp['blocks'] = _parse_blocks(args.blocks)
+    if args.bottleneck is not None:
+        hp['bottleneck'] = args.bottleneck
+    hp['blocks'] = _parse_blocks(hp['blocks'])
 
-	# Prepare output array preallocation
-	# Inspect one target to infer spatial dims
-	sample_x, sample_y = loader.dataset[0]
-	y_shape = tuple(sample_y.shape)  # (C, [D], H, W)
-	pred_shape = (n_total,) + y_shape
-	preds = np.zeros(pred_shape, dtype=np.float32)
+    print('[predict] ndim={} nic={} noc={} blocks={} channel_order={}'
+          .format(ndim, nic, noc, hp['blocks'], hp['channel_order']))
 
-	# Iterate and predict
-	idx_write = 0
-	with torch.no_grad():
-		for batch_idx, (x, _) in enumerate(loader):
-			if args.limit is not None and idx_write >= args.limit:
-				break
-			x = x.to(device)
-			y_pred = model(x).detach().cpu().numpy()
-			bs = y_pred.shape[0]
-			end = min(idx_write + bs, n_total)
-			preds[idx_write:end] = y_pred[:(end - idx_write)]
-			idx_write = end
+    if ndim == 3:
+        from models.dense_ed_3d import DenseED
+        from utils.load_data_3d import load_data
+    else:
+        from models.dense_ed import DenseED
+        from utils.load_data import load_data
 
-	# Apply T-mask: zero-out regions outside the two rectangles
-	if preds.ndim in (4, 5):
-		h, w = preds.shape[-2:]
-		mask = np.zeros((h, w), dtype=bool)
-		mask[0:136, 0:35] = True
-		mask[51:87, 35:137] = True
-		if preds.ndim == 4:
-			preds[..., ~mask] = 0.0
-		else:
-			preds[..., :, ~mask] = 0.0
+    # 归一化统计量：优先用 checkpoint 里训练时的那一份，保证标度一致
+    if ckpt_stats and 'y_min' in ckpt_stats:
+        stats = {k: np.asarray(v) if isinstance(v, (list, tuple)) else v
+                 for k, v in ckpt_stats.items()}
+        print('[predict] 使用 checkpoint 内保存的归一化统计量')
+    else:
+        stats = compute_output_stats(args.data_file)
+        print('[predict] checkpoint 内无统计量，回退到按数据文件重新统计'
+              '（若与训练集不同，结果标度会有偏差）')
 
-	# Determine output file path
-	if args.out_file is None:
-		base = os.path.splitext(os.path.basename(args.data_file))[0]
-		out_dir = os.path.dirname(args.data_file)
-		args.out_file = os.path.join(out_dir, base + '.pred.hdf5')
+    loader, stats = load_data(args.data_file, args.batch_size, stats=stats,
+                              input_key=args.input_key,
+                              prefer_sensor_input=args.prefer_sensor_input,
+                              align_input_to_output=True, shuff=False)
 
-	# Save predictions
-	if args.out_file.lower().endswith('.hdf5') or args.out_file.lower().endswith('.h5'):
-		with h5py.File(args.out_file, 'w') as f:
-			f.create_dataset('predictions', data=preds, compression='gzip')
-			f.attrs['source_data'] = args.data_file
-			f.attrs['ckpt_file'] = args.ckpt_file
-			f.attrs['ndim'] = args.ndim
-			f.attrs['nic'] = args.nic
-			f.attrs['noc'] = args.noc
-			f.attrs['blocks'] = json.dumps(args.blocks)
-			f.attrs['growth_rate'] = args.growth_rate
-			f.attrs['init_features'] = args.init_features
-			f.attrs['drop_rate'] = args.drop_rate
-			f.attrs['bn_size'] = args.bn_size
-			f.attrs['bottleneck'] = int(bool(args.bottleneck))
-	else:
-		# Fallback: npz
-		np.savez_compressed(args.out_file, predictions=preds, meta={
-			'source_data': args.data_file,
-			'ckpt_file': args.ckpt_file,
-			'ndim': args.ndim,
-			'nic': args.nic,
-			'noc': args.noc,
-			'blocks': args.blocks,
-			'growth_rate': args.growth_rate,
-			'init_features': args.init_features,
-			'drop_rate': args.drop_rate,
-			'bn_size': args.bn_size,
-			'bottleneck': bool(args.bottleneck),
-		})
+    sample_x, sample_y = loader.dataset[0]
+    output_size = tuple(sample_y.shape[-3:]) if ndim == 3 else tuple(sample_y.shape[-2:])
 
-	print('Predictions saved to:', args.out_file)
-	print('Pred shape:', preds.shape)
+    model = DenseED(in_channels=nic, out_channels=noc, blocks=hp['blocks'],
+                    growth_rate=hp['growth_rate'],
+                    init_features=hp['init_features'], drop_rate=hp['drop_rate'],
+                    bn_size=hp['bn_size'], bottleneck=hp['bottleneck'],
+                    out_activation=None, output_size=output_size,
+                    num_heads=hp['num_heads'],
+                    use_positional_encoding=not hp['no_positional_encoding'],
+                    attn_max_tokens=hp['attn_max_tokens'], verbose=False).to(device)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing or unexpected:
+        print('[predict] 警告：权重不完全匹配 · missing={} unexpected={}'
+              .format(len(missing), len(unexpected)))
+        if missing:
+            print('          缺失示例: {}'.format(missing[:5]))
+        if unexpected:
+            print('          多余示例: {}'.format(unexpected[:5]))
+    model.eval()
+
+    n_total = len(loader.dataset)
+    if args.limit is not None:
+        n_total = min(n_total, args.limit)
+    preds = np.zeros((n_total,) + tuple(sample_y.shape), dtype=np.float32)
+
+    written = 0
+    with torch.no_grad():
+        for x, _ in loader:
+            if written >= n_total:
+                break
+            y = model(x.to(device)).cpu().numpy()
+            end = min(written + y.shape[0], n_total)
+            preds[written:end] = y[:end - written]
+            written = end
+
+    if args.denormalize:
+        preds = denormalize_array(preds, stats['y_min'], stats['y_max'])
+        print('[predict] 已反归一化回物理量纲')
+
+    if args.apply_mask:
+        geometry = parse_geometry(args.t_geometry)
+        h, w = preds.shape[-2:]
+        mask = t_mask_numpy(h, w, geometry).astype(bool)
+        preds[..., ~mask] = 0.0
+        print('[predict] T 型掩码覆盖率 {:.1%} @ {}x{}'.format(mask.mean(), h, w))
+
+    out_file = args.out_file
+    if out_file is None:
+        base = os.path.splitext(os.path.basename(args.data_file))[0]
+        out_file = os.path.join(os.path.dirname(args.data_file) or '.',
+                                base + '.pred.hdf5')
+    mkdir = os.path.dirname(out_file)
+    if mkdir:
+        os.makedirs(mkdir, exist_ok=True)
+
+    with h5py.File(out_file, 'w') as f:
+        f.create_dataset('predictions', data=preds, compression='gzip')
+        # 把还原量纲所需的一切都存进去，下游不必再猜
+        f.create_dataset('y_min', data=np.asarray(stats['y_min'], dtype=np.float32))
+        f.create_dataset('y_max', data=np.asarray(stats['y_max'], dtype=np.float32))
+        f.attrs['source_data'] = args.data_file
+        f.attrs['ckpt_file'] = args.ckpt_file
+        f.attrs['ndim'] = ndim
+        f.attrs['nic'] = nic
+        f.attrs['noc'] = noc
+        f.attrs['denormalized'] = int(bool(args.denormalize))
+        f.attrs['masked'] = int(bool(args.apply_mask))
+        f.attrs['channel_order'] = str(hp['channel_order'])
+        f.attrs['hyperparams'] = json.dumps(hp, default=str)
+
+    print('[predict] 已保存 {} · shape={}'.format(out_file, preds.shape))
+    return out_file
 
 
 if __name__ == '__main__':
-	main()
-
+    main()

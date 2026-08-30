@@ -1,286 +1,377 @@
-import torch
-import numpy as np
-import torch.optim as optim
-import torch.nn.functional as F
-import h5py
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-import sys
-import os
+"""T 型管流场 PINN 代理模型 —— 主训练脚本。
 
-# choose args module based on command-line flag --ndim 3 or --use-3d
-use_3d = False
-if '--ndim' in sys.argv:
-    try:
-        idx = sys.argv.index('--ndim')
-        if sys.argv[idx + 1] == '3':
-            use_3d = True
-    except Exception:
-        pass
-if '--use-3d' in sys.argv:
-    use_3d = True
+用法
+----
+    # 单文件自动切 20% 做验证（推荐）
+    python train.py --train-file dataset/p_v_256.hdf5 --epochs 200 --batch-size 8
 
-if use_3d:
-    from args_3d import args, device
-else:
-    from args import args, device
-from utils.misc import mkdirs
+    # 显式的独立测试集
+    python train.py --train-file dataset/train.hdf5 --test-file dataset/test.hdf5
 
-# choose 2D/3D implementations depending on args.ndim (default 2)
-if getattr(args, 'ndim', 2) == 3:
-    from models.dense_ed_3d import DenseED as DenseED
-    from utils.load_data_3d import load_data
-    from utils.plot_3d import plot_prediction, save_stats
-else:
-    from models.dense_ed import DenseED
-    from utils.load_data import load_data
-    from utils.plot import plot_prediction, save_stats
+    # 3D
+    python train.py --ndim 3 --train-file dataset/10243d.hdf5
+
+关键行为变更（相对旧版）
+------------------------
+* 训练集与测试集是同一个文件时，**自动按 --val-split 切出互不重叠的验证集**，
+  不再拿训练集当测试集报 R²。
+* 测试集**复用训练集的归一化统计量**，两边标度一致，R² 才有可比性。
+* 物理损失在**有量纲**的场上计算，通道语义由 `--channel-order` 显式指定。
+* R² / RMSE **分通道**统计；学习率调度依据**验证** RMSE。
+* checkpoint 保存成自描述的 dict（含归一化统计量与全部超参），
+  `surrogate_predict.py` 据此还原物理量纲。
+"""
+
 import json
+import os
+import sys
 from time import time
 
-args.train_dir = args.run_dir + "/training"
-args.pred_dir = args.train_dir + "/predictions"
+import numpy as np
+import torch
+import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+# ------------------------------------------------------------------ 参数解析
+# 旧版靠手工扫 sys.argv 决定 import 哪个 args 模块，而两个模块又各缺对方的参数
+# （`--ndim 2` 在 2D 分支下直接 unrecognized）。现在只有一份参数定义。
+from args import parse_args, prepare_run_dir
+
+_use_3d = ('--use-3d' in sys.argv) or \
+    ('--ndim' in sys.argv and sys.argv[sys.argv.index('--ndim') + 1:][:1] == ['3'])
+args = parse_args(default_ndim=3 if _use_3d else 2)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+if args.ndim == 3:
+    from models.dense_ed_3d import DenseED
+    from utils.load_data_3d import load_data, load_train_val
+else:
+    from models.dense_ed import DenseED
+    from utils.load_data import load_data, load_train_val
+
+from utils.data_common import compute_output_stats                    # noqa: E402
+from utils.geometry import mask_coverage, parse_geometry, t_mask_like  # noqa: E402
+from utils.misc import RunningMetrics, mkdirs, new_logger             # noqa: E402
+from utils.physics_loss import (PhysicsScaler, combined_physics_loss,  # noqa: E402
+                                physics_report)
+from utils.plot import plot_prediction, save_stats                    # noqa: E402
+
+
+# ------------------------------------------------------------------ 路径解析
+def resolve_path(value, data_dir, fallback=None):
+    if value is None:
+        return fallback
+    if os.path.isabs(value) or os.path.dirname(value):
+        return value
+    return os.path.join(data_dir, value)
+
+
+def default_train_path(args):
+    if args.ndim == 3:
+        return os.path.join(args.data_dir, '10243d.hdf5')
+    return os.path.join(args.data_dir,
+                        'kle{}_lhs{}.hdf5'.format(args.kle, args.ntrain))
+
+
+train_path = resolve_path(args.train_file, args.data_dir, default_train_path(args))
+test_path = resolve_path(args.test_file, args.data_dir, None)
+
+if not os.path.exists(train_path):
+    raise FileNotFoundError(
+        '找不到训练数据 {}\n请把 HDF5 放进 dataset/ 或用 --train-file 指定路径。'
+        .format(train_path))
+
+same_file = (test_path is None) or (os.path.abspath(test_path) ==
+                                    os.path.abspath(train_path))
+
+prepare_run_dir(args)
+args.train_dir = args.run_dir + '/training'
+args.pred_dir = args.train_dir + '/predictions'
 mkdirs([args.train_dir, args.pred_dir])
 
-# load data
-train_file = None
-test_file = None
-if '--train-file' in sys.argv:
-    try:
-        train_file = sys.argv[sys.argv.index('--train-file') + 1]
-    except Exception:
-        train_file = None
-if '--test-file' in sys.argv:
-    try:
-        test_file = sys.argv[sys.argv.index('--test-file') + 1]
-    except Exception:
-        test_file = None
 
-if train_file is not None:
-    # If user passed an absolute path, use it. If user passed a relative path
-    # that contains a directory component (e.g. 'dataset/10243d.hdf5'),
-    # assume they intended that relative path and use it as-is. Only join
-    # with args.data_dir when the user provided a bare filename.
-    if os.path.isabs(train_file):
-        train_data_dir = train_file
-    elif os.path.dirname(train_file):
-        train_data_dir = train_file
-    else:
-        train_data_dir = os.path.join(args.data_dir, train_file)
-elif getattr(args, 'ndim', 2) == 3:
-    train_data_dir = os.path.join(args.data_dir, '10243d.hdf5')
-else:
-    train_data_dir = args.data_dir + '/kle{}_lhs{}.hdf5'.format(args.kle, args.ntrain)
-
-if test_file is not None:
-    if os.path.isabs(test_file):
-        test_data_dir = test_file
-    elif os.path.dirname(test_file):
-        test_data_dir = test_file
-    else:
-        test_data_dir = os.path.join(args.data_dir, test_file)
-elif getattr(args, 'ndim', 2) == 3:
-    test_data_dir = train_data_dir
-else:
-    test_data_dir = args.data_dir + '/kle{}_mc{}.hdf5'.format(args.kle, args.ntest)
-
-# auto-detect channels and output size from training file (2D and 3D)
-try:
-    with h5py.File(train_data_dir, 'r') as f:
+# ------------------------------------------------------------------ 形状推断
+def infer_shapes(path, args):
+    import h5py
+    with h5py.File(path, 'r') as f:
         y_shape = f['output'].shape
-        if len(y_shape) >= 5:
-            args.noc = y_shape[1]
-            args.image_size = list(y_shape[-3:])
-        elif len(y_shape) == 4:
-            args.noc = y_shape[1]
-            args.image_size = [1] + list(y_shape[-2:])
-        else: # 3D (C, H, W)
-            args.noc = y_shape[1]
-            args.image_size = list(y_shape[-2:])
+        noc = int(y_shape[1])
+        spatial = list(y_shape[2:])
+        if args.ndim == 3 and len(spatial) == 2:
+            spatial = [1] + spatial
 
-        if 'sensor_input' in f:
-            x_shape = f['sensor_input'].shape
-        else:
-            x_shape = f['input'].shape
-        if len(x_shape) in [4, 5]:
-            args.nic = x_shape[1]
-        else:
-            args.nic = 1
-except Exception as e:
-    print('Warning: failed to infer data shapes from {}: {}'.format(train_data_dir, e))
+        input_key = args.input_key
+        if input_key is None:
+            candidates = ['sensor_input', 'input'] if args.prefer_sensor_input \
+                else ['input', 'sensor_input']
+            input_key = next((k for k in candidates if k in f), None)
+        if input_key is None:
+            raise KeyError('HDF5 中找不到 input / sensor_input')
+        x_shape = f[input_key].shape
+        nic = int(x_shape[1]) if len(x_shape) >= 4 else 1
+    return nic, noc, spatial
 
-# initialize model
-model = DenseED(in_channels=getattr(args, 'nic', 1), out_channels=getattr(args, 'noc', 3), 
-                blocks=args.blocks,
-                growth_rate=args.growth_rate, 
-                init_features=args.init_features,
-                drop_rate=args.drop_rate,
-                bn_size=args.bn_size,
-                bottleneck=args.bottleneck,
-                out_activation=None,
-                output_size=tuple(getattr(args, 'image_size', [1, 65, 65])) if getattr(args, 'ndim', 2) == 3 else None).to(device)
-print(model)
 
-train_loader, _ = load_data(train_data_dir, args.batch_size)
-test_loader, _ = load_data(test_data_dir, args.test_batch_size)
-print('Loaded data!')
+inferred_nic, inferred_noc, inferred_spatial = infer_shapes(train_path, args)
+args.nic = args.nic or inferred_nic
+args.noc = args.noc or inferred_noc
+args.image_size = args.image_size or inferred_spatial
+
+# 3D 的输入是把 spatial_input 与标量向量拼在一起，通道数要以实际组装结果为准
+print('[train] 数据维度 ndim={} · 输入通道={} · 输出通道={} · 分辨率={}'
+      .format(args.ndim, args.nic, args.noc, args.image_size))
+
+# ------------------------------------------------------------------ 物理常量
+grid_hw = args.image_size[-2:]
+dy = float(args.domain_size[0]) / max(int(grid_hw[0]) - 1, 1)
+dx = float(args.domain_size[1]) / max(int(grid_hw[1]) - 1, 1)
+geometry = None if args.no_mask else parse_geometry(args.t_geometry)
+
+print('[train] 网格间距 dx={:.6g} dy={:.6g}（domain_size={}）'
+      .format(dx, dy, args.domain_size))
+print('[train] 通道顺序 --channel-order={} -> {}'.format(
+    args.channel_order,
+    '(P, Vx, Vy)' if args.channel_order == 'pvv' else '(Vx, Vy, P)'))
+print('!!! 请确认该顺序与数据集 output 的实际通道语义一致，'
+      '否则所有物理约束都作用在错误的通道上 !!!')
+if geometry is not None:
+    print('[train] T 型掩码覆盖率 {:.1%} @ {}x{}'.format(
+        mask_coverage(int(grid_hw[0]), int(grid_hw[1]), geometry),
+        int(grid_hw[0]), int(grid_hw[1])))
+else:
+    print('[train] 已关闭 T 型掩码（--no-mask），在整幅网格上训练')
+
+
+# ------------------------------------------------------------------ 数据
+loader_kwargs = dict(input_key=args.input_key,
+                     prefer_sensor_input=args.prefer_sensor_input,
+                     num_workers=args.num_workers)
+
+stats = compute_output_stats(train_path)
+
+if same_file:
+    train_loader, test_loader, stats = load_train_val(
+        train_path, args.batch_size, val_split=args.val_split, seed=args.seed,
+        test_batch_size=args.test_batch_size, stats=stats, **loader_kwargs)
+    if test_loader is None:
+        print('[train] 警告：--val-split=0，验证集为空，将回退到用训练集评估'
+              '（此时 R² 是样本内指标，不代表泛化能力）')
+        test_loader, _ = load_data(train_path, args.test_batch_size, stats=stats,
+                                   shuff=False, **loader_kwargs)
+else:
+    train_loader, stats = load_data(train_path, args.batch_size, stats=stats,
+                                    shuff=True, **loader_kwargs)
+    # 测试集必须用训练集的统计量归一化，否则两边标度不同，R² 不可比
+    test_loader, _ = load_data(test_path, args.test_batch_size, stats=stats,
+                               shuff=False, **loader_kwargs)
+
+y_min = torch.as_tensor(stats['y_min'], dtype=torch.float32, device=device)
+y_max = torch.as_tensor(stats['y_max'], dtype=torch.float32, device=device)
+phys_min = y_min if args.physics_in_physical_units else None
+phys_max = y_max if args.physics_in_physical_units else None
+print('[train] 训练样本 {} · 测试样本 {}'
+      .format(len(train_loader.dataset), len(test_loader.dataset)))
+
+
+# ------------------------------------------------------------------ 模型
+model = DenseED(
+    in_channels=args.nic, out_channels=args.noc, blocks=args.blocks,
+    growth_rate=args.growth_rate, init_features=args.init_features,
+    drop_rate=args.drop_rate, bn_size=args.bn_size, bottleneck=args.bottleneck,
+    out_activation=None,
+    output_size=tuple(args.image_size) if args.ndim == 3 else tuple(args.image_size[-2:]),
+    num_heads=args.num_heads,
+    use_positional_encoding=not args.no_positional_encoding,
+    attn_max_tokens=args.attn_max_tokens,
+).to(device)
 
 optimizer = optim.Adam(model.parameters(), lr=args.lr,
                        weight_decay=args.weight_decay)
-scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10,
-                    #verbose=True, 
-                    threshold=0.0001, threshold_mode='rel',
-                    cooldown=0, min_lr=0, eps=1e-8)
+scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5,
+                              patience=args.lr_patience, threshold=1e-4,
+                              threshold_mode='rel', min_lr=1e-6)
 
-logger = {}
-logger['rmse_train'] = []
-logger['rmse_test'] = []
-logger['r2_train'] = []
-logger['r2_test'] = []
-logger['time'] = []
+logger = new_logger()
+physics_scaler = PhysicsScaler(enabled=(args.physics_loss_scaling == 'ema'))
 
 
-def build_t_mask(output):
-    h, w = output.shape[-2:]
-    mask_2d = torch.zeros((h, w), device=output.device, dtype=output.dtype)
-    y1 = min(136, h)
-    x1 = min(35, w)
-    if y1 > 0 and x1 > 0:
-        mask_2d[0:y1, 0:x1] = 1.0
-    y0, y1b = min(51, h), min(87, h)
-    x0, x1b = min(35, w), min(137, w)
-    if y1b > y0 and x1b > x0:
-        mask_2d[y0:y1b, x0:x1b] = 1.0
-    if output.dim() == 4:
-        return mask_2d.unsqueeze(0).unsqueeze(0)
-    if output.dim() == 5:
-        d = output.shape[-3]
-        return mask_2d.unsqueeze(0).unsqueeze(0).unsqueeze(2).repeat(1, 1, d, 1, 1)
-    raise ValueError('Unsupported output dim {}'.format(output.dim()))
+def build_mask(tensor):
+    if geometry is None:
+        return None
+    return t_mask_like(tensor, geometry)
 
-def test(epoch):#epoch is a number
+
+def save_checkpoint(epoch, path=None):
+    """自描述 checkpoint：权重 + 超参 + 归一化统计量。"""
+    path = path or '{}/model_epoch{}.pth'.format(args.ckpt_dir, epoch)
+    torch.save({
+        'format': 2,
+        'epoch': epoch,
+        'model': model.state_dict(),
+        'args': {k: v for k, v in vars(args).items()
+                 if isinstance(v, (int, float, str, bool, list, tuple, type(None)))},
+        'stats': {k: (np.asarray(v).tolist() if isinstance(v, np.ndarray) else v)
+                  for k, v in stats.items()},
+    }, path)
+    return path
+
+
+# ------------------------------------------------------------------ 评估
+@torch.no_grad()
+def evaluate(epoch, do_plot=False):
     model.eval()
-    mse = 0.
-    n_out_pixels_test = 0
-    masked_sum_y = 0.
-    masked_sum_y2 = 0.
-    for batch_idx, (input, target) in enumerate(test_loader):
-        input, target = input.to(device), target.to(device)
-        output = model(input)
-        t_mask = build_t_mask(output)
-        t_mask = t_mask.expand(output.shape[0], output.shape[1], *output.shape[2:])
-        masked_output = output * t_mask
-        masked_target = target * t_mask
-        mse += F.mse_loss(masked_output, masked_target, reduction='sum').item()
-        n_out_pixels_test += t_mask.sum().item()
-        masked_sum_y += masked_target.sum().item()
-        masked_sum_y2 += (masked_target ** 2).sum().item()
+    metrics = RunningMetrics(args.noc)
+    div_rms, ns_rms, n_batches = 0.0, 0.0, 0
 
-        # plot predictions
-        if epoch % args.plot_freq == 0 and batch_idx == 0:
-            n_samples = 6 if epoch == args.epochs else 2
-            idx = torch.randperm(input.size(0))[:n_samples]
-            samples_output = masked_output.data.cpu()[idx].numpy()
-            samples_target = masked_target.data.cpu()[idx].numpy()
+    for batch_idx, (inputs, targets) in enumerate(test_loader):
+        inputs, targets = inputs.to(device), targets.to(device)
+        outputs = model(inputs)
+        mask = build_mask(outputs)
+        metrics.update(outputs, targets, mask)
 
+        if batch_idx == 0:
+            report = physics_report(outputs, mask, args.channel_order,
+                                    phys_min, phys_max, args.rho, args.nu, dx, dy)
+            div_rms, ns_rms, n_batches = report['div_rms'], report['ns_rms'], 1
+
+        if do_plot and batch_idx == 0:
+            n_samples = min(6 if epoch >= args.epochs else 2, inputs.size(0))
+            mask_np = None
+            if mask is not None:
+                mask_np = mask.reshape(-1, *mask.shape[-2:])[0].cpu().numpy()
             for i in range(n_samples):
-                print('epoch {}: plotting prediction {}'.format(epoch, i))
-                plot_prediction(args.pred_dir, samples_target[i], 
-                    samples_output[i], epoch, i, plot_fn=args.plot_fn)
-            
-            del samples_output, samples_target, idx
-            torch.cuda.empty_cache()
+                plot_prediction(args.pred_dir, targets[i].cpu(), outputs[i].cpu(),
+                                epoch, i, plot_fn=args.plot_fn,
+                                channel_order=args.channel_order, mask=mask_np)
 
-    rmse_test = np.sqrt(mse / max(n_out_pixels_test, 1.0))
-    ss_tot = masked_sum_y2 - (masked_sum_y ** 2) / max(n_out_pixels_test, 1.0)
-    r2_score = 1 - mse / max(ss_tot, 1e-12)
-    print("epoch: {}, test r2-score:  {:.6f}".format(epoch, r2_score))
+    del n_batches
+    return metrics, div_rms, ns_rms
 
-    if epoch % args.log_freq == 0:
-        logger['r2_test'].append(r2_score)
-        logger['rmse_test'].append(rmse_test)
-        
-    try: del input, target, output, t_mask, masked_output, masked_target
-    except: pass
-    torch.cuda.empty_cache()
 
-# Import the PINN combined loss from utils.physics_loss
-from utils.physics_loss import combined_physics_loss
-
-def train(epoch):
+# ------------------------------------------------------------------ 训练
+def train_one_epoch(epoch):
     model.train()
-    mse = 0.
-    n_out_pixels_train = 0
-    masked_sum_y = 0.
-    masked_sum_y2 = 0.
-    for _, (input, target) in enumerate(train_loader):
-        input, target = input.to(device), target.to(device)
-        model.zero_grad()
-        output = model(input)
-        t_mask = build_t_mask(output)
-        t_mask = t_mask.expand(output.shape[0], output.shape[1], *output.shape[2:])
-        
-        # Apply combined physics loss instead of pure L1 loss
-        loss, loss_dict = combined_physics_loss(
-            output, target, 
-            mask=t_mask, 
-            epoch=epoch, 
-            total_epochs=args.epochs,
-            div_weight=0.05,
-            ns_weight=0.005,
-            smooth_weight=0.005
-        )
-        
+    metrics = RunningMetrics(args.noc)
+    accum = {'base': 0.0, 'div': 0.0, 'ns': 0.0, 'smooth': 0.0, 'total': 0.0}
+    n_batches = 0
+
+    for inputs, targets in train_loader:
+        inputs, targets = inputs.to(device), targets.to(device)
+        optimizer.zero_grad(set_to_none=True)
+        outputs = model(inputs)
+        mask = build_mask(outputs)
+
+        loss, parts = combined_physics_loss(
+            outputs, targets, mask=mask, epoch=epoch, total_epochs=args.epochs,
+            div_weight=args.div_weight, ns_weight=args.ns_weight,
+            smooth_weight=args.smooth_weight, channel_order=args.channel_order,
+            y_min=phys_min, y_max=phys_max, rho=args.rho, nu=args.nu,
+            dx=dx, dy=dy, physics_warmup=args.physics_warmup,
+            scales=physics_scaler.current())
+        physics_scaler.update(parts)
+
+        if not torch.isfinite(loss):
+            print('[train] epoch {}: 损失出现 NaN/Inf，跳过该 batch'.format(epoch))
+            optimizer.zero_grad(set_to_none=True)
+            continue
+
         loss.backward()
+        if args.grad_clip and args.grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         optimizer.step()
-        
-        masked_output = output * t_mask
-        masked_target = target * t_mask
-        mse += F.mse_loss(masked_output, masked_target, reduction='sum').item()
-        n_out_pixels_train += t_mask.sum().item()
-        masked_sum_y += masked_target.sum().item()
-        masked_sum_y2 += (masked_target ** 2).sum().item()
 
-    rmse = np.sqrt(mse / max(n_out_pixels_train, 1.0))
-    scheduler.step(rmse)
-    ss_tot = masked_sum_y2 - (masked_sum_y ** 2) / max(n_out_pixels_train, 1.0)
-    r2_score = 1 - mse / max(ss_tot, 1e-12)
-    print("epoch: {}, training r2: {:.6f}, base_loss: {:.4f}, div_loss: {:.6f}, ns_loss: {:.6f}".format(
-        epoch, r2_score, loss_dict['base'], loss_dict['div'], loss_dict['ns']))
-    if epoch % args.log_freq == 0:
-        logger['r2_train'].append(r2_score)
-        logger['rmse_train'].append(rmse)
-    # save model
-    if epoch % args.ckpt_freq == 0:
-        torch.save(model.state_dict(), args.ckpt_dir + "/model_epoch{}.pth".format(epoch))
-        
-    try: del input, target, output, loss, loss_dict, t_mask, masked_output, masked_target
-    except: pass
-    torch.cuda.empty_cache()
+        metrics.update(outputs.detach(), targets, mask)
+        for key in accum:
+            accum[key] += parts[key]
+        n_batches += 1
+
+    if n_batches == 0:
+        raise RuntimeError('训练集为空，请检查 --val-split 与数据文件')
+    for key in accum:
+        accum[key] /= n_batches
+    return metrics, accum
 
 
-print('Start training........................................................')
-tic = time()
-if args.post:
-    print("In post-processing mode, skipping training.")
-    with torch.no_grad():
-        test(args.ckpt_epoch if args.ckpt_epoch is not None else args.epochs)
-    tic2 = time()
-    print("Finished testing using pre-trained model in {} seconds".format(tic2 - tic))
-else:
-    for epoch in range(1, args.epochs + 1):
-        train(epoch)
-        with torch.no_grad():
-            test(epoch)
-    tic2 = time()
-    print("Finished training {} epochs with {} data using {} seconds (including long... plotting time)"
-        .format(args.epochs, args.ntrain, tic2 - tic))
+def main():
+    print('=' * 72)
+    print('开始训练 · device={} · epochs={}'.format(device, args.epochs))
+    print('=' * 72)
+    tic = time()
+    best_rmse, best_path = float('inf'), None
 
-x_axis = np.arange(args.log_freq, args.epochs + args.log_freq, args.log_freq)
-logger['time'].append(tic2 - tic)
-# plot the rmse, r2-score curve and save them in txt
-save_stats(args.train_dir, logger, x_axis)
+    if args.post:
+        ckpt_epoch = args.ckpt_epoch or args.epochs
+        ckpt_path = '{}/model_epoch{}.pth'.format(args.ckpt_dir, ckpt_epoch)
+        if os.path.exists(ckpt_path):
+            blob = torch.load(ckpt_path, map_location=device, weights_only=False)
+            model.load_state_dict(blob['model'] if isinstance(blob, dict)
+                                  and 'model' in blob else blob)
+            print('[post] 已加载 {}'.format(ckpt_path))
+        else:
+            print('[post] 警告：找不到 {}，使用当前（未训练）权重'.format(ckpt_path))
 
-args.training_time = tic2 - tic
-args.n_params, args.n_layers = model._num_parameters_convlayers()
-with open(args.run_dir + "/args.txt", 'w') as args_file:
-    json.dump(vars(args), args_file, indent=4)
+        metrics, div_rms, ns_rms = evaluate(ckpt_epoch, do_plot=True)
+        logger['r2_test'].append(metrics.r2())
+        logger['rmse_test'].append(metrics.rmse())
+        logger['r2_test_per_channel'].append(metrics.r2_per_channel().tolist())
+        logger['div_rms'].append(div_rms)
+        logger['ns_rms'].append(ns_rms)
+        print('[post] R²={:.6f}  RMSE={:.6f}  分通道 R²={}'
+              .format(metrics.r2(), metrics.rmse(),
+                      np.round(metrics.r2_per_channel(), 4).tolist()))
+    else:
+        for epoch in range(1, args.epochs + 1):
+            train_metrics, parts = train_one_epoch(epoch)
+            do_plot = (epoch % args.plot_freq == 0) or (epoch == args.epochs)
+            test_metrics, div_rms, ns_rms = evaluate(epoch, do_plot=do_plot)
+
+            # 学习率按**验证** RMSE 调度（旧版用的是训练 RMSE）
+            scheduler.step(test_metrics.rmse())
+
+            print('epoch {:>4}｜train R²={:.5f} RMSE={:.5f}｜'
+                  'test R²={:.5f} RMSE={:.5f}｜'
+                  'base={:.4e} div={:.3e} ns={:.3e} smooth={:.3e}｜lr={:.2e}'
+                  .format(epoch, train_metrics.r2(), train_metrics.rmse(),
+                          test_metrics.r2(), test_metrics.rmse(),
+                          parts['base'], parts['div'], parts['ns'],
+                          parts['smooth'], optimizer.param_groups[0]['lr']))
+
+            if epoch % args.log_freq == 0 or epoch == args.epochs:
+                logger['r2_train'].append(train_metrics.r2())
+                logger['rmse_train'].append(train_metrics.rmse())
+                logger['r2_test'].append(test_metrics.r2())
+                logger['rmse_test'].append(test_metrics.rmse())
+                logger['r2_test_per_channel'].append(
+                    test_metrics.r2_per_channel().tolist())
+                logger['div_rms'].append(div_rms)
+                logger['ns_rms'].append(ns_rms)
+
+            if epoch % args.ckpt_freq == 0 or epoch == args.epochs:
+                save_checkpoint(epoch)
+
+            if test_metrics.rmse() < best_rmse:
+                best_rmse = test_metrics.rmse()
+                best_path = save_checkpoint(epoch, args.ckpt_dir + '/model_best.pth')
+
+        print('最优验证 RMSE={:.6f} -> {}'.format(best_rmse, best_path))
+        final = logger['r2_test_per_channel'][-1] if logger['r2_test_per_channel'] else []
+        print('最终分通道 R²: {}'.format(np.round(final, 4).tolist()))
+
+    elapsed = time() - tic
+    logger['time'].append(elapsed)
+    print('耗时 {:.1f} 秒（含绘图）'.format(elapsed))
+
+    save_stats(args.train_dir, logger)
+
+    args.training_time = elapsed
+    args.n_params, args.n_layers = model._num_parameters_convlayers()
+    args.best_rmse = best_rmse if best_rmse != float('inf') else None
+    args.final_r2 = logger['r2_test'][-1] if logger['r2_test'] else None
+    args.norm_stats = {k: (np.asarray(v).tolist() if isinstance(v, np.ndarray) else v)
+                       for k, v in stats.items()}
+    with open(args.run_dir + '/args.txt', 'w', encoding='utf-8') as fh:
+        json.dump(vars(args), fh, indent=4, ensure_ascii=False, default=str)
+
+
+if __name__ == '__main__':
+    main()

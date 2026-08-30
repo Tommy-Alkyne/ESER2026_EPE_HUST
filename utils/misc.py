@@ -1,160 +1,100 @@
-import torch
-import numpy as np
+"""杂项工具。
+
+旧版这里堆着上游 SVGD / 贝叶斯版本遗留的死代码：一个全局可变 `logger` 字典、
+`log_sum_exp`、`parameters_to_vector` / `vector_to_parameters`（后者还硬依赖
+已废弃的 `torch.cuda.FloatTensor`）。全项目没有任何地方引用它们，已删除。
+"""
+
 import os
 
+import numpy as np
+import torch
 
-logger = {}
-logger['rmse_train'] = []
-logger['rmse_test'] = []
-logger['r2_train'] = []
-logger['r2_test'] = []
-logger['mnlp_test'] = []
-logger['log_beta'] = []
 
-#下面这俩是创建文件夹
 def mkdir(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
+    if path and not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+
 
 def mkdirs(paths):
-    if isinstance(paths, list) and not isinstance(paths, str):
+    if isinstance(paths, (list, tuple)):
         for path in paths:
             mkdir(path)
     else:
         mkdir(paths)
 
-def to_numpy(input):
-    if isinstance(input, torch.Tensor):
-        return input.cpu().numpy()
-    elif isinstance(input, np.ndarray):
-        return input
-    else:
-        raise TypeError('Unknown type of input, expected torch.Tensor or '\
-            'np.ndarray, but got {}'.format(type(input)))
+
+def to_numpy(x):
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    if isinstance(x, np.ndarray):
+        return x
+    raise TypeError('期望 torch.Tensor 或 np.ndarray，得到 {}'.format(type(x)))
 
 
-def log_sum_exp(input, dim=None, keepdim=False):
-    """Numerically stable LogSumExp.
+def new_logger():
+    """训练日志容器。改成函数返回，避免旧版模块级可变全局被跨实验复用。"""
+    return {
+        'rmse_train': [],
+        'rmse_test': [],
+        'r2_train': [],
+        'r2_test': [],
+        'r2_test_per_channel': [],
+        'div_rms': [],
+        'ns_rms': [],
+        'time': [],
+    }
 
-    Args:
-        input (Tensor)
-        dim (int): Dimension along with the sum is performed
-        keepdim (bool): Whether to retain the last dimension on summing
 
-    Returns:
-        Equivalent of log(sum(exp(inputs), dim=dim, keepdim=keepdim)).
+class RunningMetrics:
+    """按掩码累计 SSE / SST，支持整体与分通道 R²。
+
+    旧版把三个通道池化成一个 R²，压力场好、速度场差会被平均掩盖。
     """
-    # For a 1-D array x (any array along a single dimension),
-    # log sum exp(x) = s + log sum exp(x - s)
-    # with s = max(x) being a common choice.
-    if dim is None:
-        input = input.view(-1)
-        dim = 0
-    max_val = input.max(dim=dim, keepdim=True)[0]
-    output = max_val + (input - max_val).exp().sum(dim=dim, keepdim=True).log()
-    if not keepdim:
-        output = output.squeeze(dim)
-    return output
 
+    def __init__(self, n_channels):
+        self.n_channels = n_channels
+        self.reset()
 
-def parameters_to_vector(parameters, grad=False, both=False):
-    """Convert parameters or/and their gradients to one vector
-    Arguments:
-        parameters (Iterable[Variable]): an iterator of Variables that are the
-            parameters of a model.
-        grad (bool): Vectorizes gradients if true, otherwise vectorizes params
-        both (bool): If True, vectorizes both parameters and their gradients,
-            `grad` has no effect in this case. Otherwise vectorizes parameters
-            or gradients according to `grad`.
-    Returns:
-        The parameters or/and their gradients (each) represented by a single
-        vector (th.Tensor, not Variable)
-    """
-    # Flag for the device where the parameter is located
-    param_device = None
+    def reset(self):
+        z = np.zeros(self.n_channels, dtype=np.float64)
+        self.sse = z.copy()
+        self.sum_y = z.copy()
+        self.sum_y2 = z.copy()
+        self.count = z.copy()
 
-    if not both:
-        vec = []
-        if not grad:
-            for param in parameters:
-                # Ensure the parameters are located in the same device
-                param_device = _check_param_device(param, param_device)
-                vec.append(param.data.view(-1))
+    @torch.no_grad()
+    def update(self, output, target, mask=None):
+        """output / target: (B, C, ...)；mask 可广播。"""
+        err2 = (output - target) ** 2
+        if mask is None:
+            weight = torch.ones_like(target)
         else:
-            for param in parameters:
-                param_device = _check_param_device(param, param_device)
-                vec.append(param.grad.data.view(-1))
-        return torch.cat(vec)
-    else:
-        vec_params, vec_grads = [], []
-        for param in parameters:
-            param_device = _check_param_device(param, param_device)
-            vec_params.append(param.data.view(-1))
-            vec_grads.append(param.grad.data.view(-1))
-        return torch.cat(vec_params), torch.cat(vec_grads)
+            weight = mask.to(dtype=target.dtype)
+            if weight.shape != target.shape:
+                weight = weight.expand_as(target)
 
-def vector_to_parameters(vec, parameters, grad=True):
-    """Convert one vector to the parameters or gradients of the parameters
-    Arguments:
-        vec (torch.Tensor): a single vector represents the parameters of a model.
-        parameters (Iterable[Variable]): an iterator of Variables that are the
-            parameters of a model.
-        grad (bool): True for assigning de-vectorized `vec` to gradients
-    """
-    # Ensure vec of type Variable
-    if not isinstance(vec, torch.cuda.FloatTensor):
-        raise TypeError('expected torch.Tensor, but got: {}'
-                        .format(torch.typename(vec)))
-    # Flag for the device where the parameter is located
-    param_device = None
+        dims = [0] + list(range(2, target.dim()))
+        self.sse += (err2 * weight).sum(dim=dims).double().cpu().numpy()
+        self.sum_y += (target * weight).sum(dim=dims).double().cpu().numpy()
+        self.sum_y2 += ((target ** 2) * weight).sum(dim=dims).double().cpu().numpy()
+        self.count += weight.sum(dim=dims).double().cpu().numpy()
 
-    # Pointer for slicing the vector for each parameter
-    pointer = 0
-    if grad:
-        for param in parameters:
-            # Ensure the parameters are located in the same device
-            param_device = _check_param_device(param, param_device)
-            # The length of the parameter
-            num_param = torch.prod(torch.LongTensor(list(param.size())))
-            param.grad.data = vec[pointer:pointer + num_param].view(
-                param.size())
-            # Increment the pointer
-            pointer += num_param
-    else:
-        for param in parameters:
-            # Ensure the parameters are located in the same device
-            param_device = _check_param_device(param, param_device)
-            # The length of the parameter
-            num_param = torch.prod(torch.LongTensor(list(param.size())))
-            param.data = vec[pointer:pointer + num_param].view(
-                param.size())
-            # Increment the pointer
-            pointer += num_param
+    def _sst(self):
+        n = np.maximum(self.count, 1.0)
+        return np.maximum(self.sum_y2 - self.sum_y ** 2 / n, 0.0)
 
+    def r2_per_channel(self):
+        sst = self._sst()
+        return np.where(sst > 1e-12, 1.0 - self.sse / np.maximum(sst, 1e-12), np.nan)
 
-def _check_param_device(param, old_param_device):
-    """This helper function is to check if the parameters are located
-    in the same device. Currently, the conversion between model parameters
-    and single vector form is not supported for multiple allocations,
-    e.g. parameters in different GPUs, or mixture of CPU/GPU.
-    Arguments:
-        param ([Variable]): a Variable of a parameter of a model
-        old_param_device (int): the device where the first parameter of a
-                                model is allocated.
-    Returns:
-        old_param_device (int): report device for the first time
-    """
+    def r2(self):
+        """全局 R²（各通道 SSE / SST 汇总）。"""
+        sst = self._sst().sum()
+        return float(1.0 - self.sse.sum() / max(sst, 1e-12))
 
-    # Meet the first parameter
-    if old_param_device is None:
-        old_param_device = param.get_device() if param.is_cuda else -1
-    else:
-        warn = False
-        if param.is_cuda:  # Check if in same GPU
-            warn = (param.get_device() != old_param_device)
-        else:  # Check if in CPU
-            warn = (old_param_device != -1)
-        if warn:
-            raise TypeError('Found two parameters on different devices, '
-                            'this is currently not supported.')
-    return old_param_device
+    def rmse(self):
+        return float(np.sqrt(self.sse.sum() / max(self.count.sum(), 1.0)))
+
+    def rmse_per_channel(self):
+        return np.sqrt(self.sse / np.maximum(self.count, 1.0))

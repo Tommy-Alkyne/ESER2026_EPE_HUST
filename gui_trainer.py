@@ -1,227 +1,333 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext, messagebox
-import subprocess
-import threading
+"""T 型流体场 PINN 训练控制台（Tkinter）。
+
+修复内容
+--------
+* 用 `sys.executable` 启动子进程，不再写死 "python"（venv/conda 下会调错解释器）。
+* 默认实验名改成 ASCII，避免中文路径在跨平台/跨工具链下出问题。
+* 暴露新增的关键参数：val_split、channel_order、物理项权重、domain_size、
+  rho/nu、掩码开关 —— 这些以前是硬编码在 train.py 里的，改一次要动源码。
+* `--ndim 3` 默认关闭（旧版默认勾选 3D，多数人其实在跑 2D）。
+* 停止训练改为先 terminate 再等待，超时才 kill，避免留下僵尸进程。
+* 子进程以本文件所在目录为工作目录，从任意路径启动 GUI 都能跑。
+"""
+
 import os
 import queue
+import subprocess
+import sys
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 class FluidTrainerGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("T型流体场 PINN 训练控制台")
-        self.root.geometry("1000x750")
-        self.root.minsize(900, 650)
-        
+        self.root.title('T 型流体场 PINN 训练控制台')
+        self.root.geometry('1180x820')
+        self.root.minsize(1040, 700)
+
         self.process = None
         self.output_queue = queue.Queue()
-        
+
         self.create_widgets()
         self.check_queue()
+        self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
+    # ------------------------------------------------------------------ UI
     def create_widgets(self):
-        # 整体布局: 左侧参数配置，右侧终端输出
-        main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        main_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        left_frame = ttk.Frame(main_paned)
-        right_frame = ttk.Frame(main_paned)
-        
-        main_paned.add(left_frame, weight=1)
-        main_paned.add(right_frame, weight=2)
-        
-        # ================= 左侧: 参数配置 =================
-        # 1. 数据配置
-        data_frame = ttk.LabelFrame(left_frame, text="数据配置 (Data Configuration)")
-        data_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(data_frame, text="训练集 (Train File):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.train_file_var = tk.StringVar(value="p_v_256.hdf5")
-        ttk.Entry(data_frame, textvariable=self.train_file_var, width=20).grid(row=0, column=1, padx=5)
-        
-        ttk.Label(data_frame, text="测试集 (Test File):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        self.test_file_var = tk.StringVar(value="p_v_256.hdf5")
-        ttk.Entry(data_frame, textvariable=self.test_file_var, width=20).grid(row=1, column=1, padx=5)
-        
-        self.use_3d_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(data_frame, text="启用 3D 模型 (--ndim 3)", variable=self.use_3d_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # 2. 训练超参数
-        hyper_frame = ttk.LabelFrame(left_frame, text="超参数配置 (Hyperparameters)")
-        hyper_frame.pack(fill=tk.X, pady=5)
-        
-        params = [
-            ("总轮数 (Epochs):", "epochs_var", "200"),
-            ("批大小 (Batch Size):", "batch_size_var", "16"),
-            ("学习率 (LR):", "lr_var", "0.003"),
-            ("网络宽度 (Growth Rate):", "growth_rate_var", "16"),
-            ("权重衰减 (Weight Decay):", "wd_var", "0.0005"),
-        ]
-        
-        for i, (label_text, var_name, default_val) in enumerate(params):
-            ttk.Label(hyper_frame, text=label_text).grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
-            var = tk.StringVar(value=default_val)
-            setattr(self, var_name, var)
-            ttk.Entry(hyper_frame, textvariable=var, width=15).grid(row=i, column=1, padx=5)
+        left = ttk.Frame(paned)
+        right = ttk.Frame(paned)
+        paned.add(left, weight=1)
+        paned.add(right, weight=2)
 
-        # 3. 实验配置
-        exp_frame = ttk.LabelFrame(left_frame, text="实验管理 (Experiment)")
-        exp_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(exp_frame, text="实验组名称:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.exp_name_var = tk.StringVar(value="严格按照轮数")
-        ttk.Entry(exp_frame, textvariable=self.exp_name_var, width=15).grid(row=0, column=1, padx=5)
-        
-        ttk.Label(exp_frame, text="保存频率 (Ckpt Freq):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        self.ckpt_freq_var = tk.StringVar(value="50")
-        ttk.Entry(exp_frame, textvariable=self.ckpt_freq_var, width=15).grid(row=1, column=1, padx=5)
+        canvas = tk.Canvas(left, highlightthickness=0, width=430)
+        scroll = ttk.Scrollbar(left, orient=tk.VERTICAL, command=canvas.yview)
+        form = ttk.Frame(canvas)
+        form.bind('<Configure>',
+                  lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=form, anchor='nw')
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 4. 控制按钮
-        control_frame = ttk.Frame(left_frame)
-        control_frame.pack(fill=tk.X, pady=15)
-        
-        self.start_btn = ttk.Button(control_frame, text="开始训练", command=self.start_training)
-        self.start_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
-        
-        self.stop_btn = ttk.Button(control_frame, text="停止训练", command=self.stop_training, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+        self.vars = {}
 
-        # ================= 左侧: GPU监控 =================
-        gpu_frame = ttk.LabelFrame(left_frame, text="硬件监控 (System & GPU)")
-        gpu_frame.pack(fill=tk.X, pady=5)
-        
-        self.gpu_util_var = tk.StringVar(value="GPU 使用率: 正在获取...")
-        ttk.Label(gpu_frame, textvariable=self.gpu_util_var, font=("Consolas", 11, "bold"), foreground="blue").pack(anchor=tk.W, padx=5, pady=5)
-        
-        self.gpu_mem_var = tk.StringVar(value="显存使用量: 正在获取...")
-        ttk.Label(gpu_frame, textvariable=self.gpu_mem_var, font=("Consolas", 11, "bold"), foreground="purple").pack(anchor=tk.W, padx=5, pady=5)
+        # ---------------------------------------------------------- 数据
+        data = ttk.LabelFrame(form, text='数据配置')
+        data.pack(fill=tk.X, pady=4, padx=4)
+        self._file_row(data, 0, '训练集:', 'train_file', 'dataset/p_v_256.hdf5')
+        self._file_row(data, 1, '测试集(可空):', 'test_file', '')
+        self._entry_row(data, 2, '验证集比例 val-split:', 'val_split', '0.2')
+        self.use_3d_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(data, text='3D 体素模型 (--ndim 3)',
+                        variable=self.use_3d_var).grid(
+            row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=4)
+        ttk.Label(data, text='测试集留空时，会从训练集里按比例切出互不重叠的验证集',
+                  foreground='gray').grid(row=4, column=0, columnspan=3,
+                                          sticky=tk.W, padx=5)
 
+        # ---------------------------------------------------------- 物理
+        phys = ttk.LabelFrame(form, text='物理设置（PINN）')
+        phys.pack(fill=tk.X, pady=4, padx=4)
+        ttk.Label(phys, text='通道顺序:').grid(row=0, column=0, sticky=tk.W,
+                                           padx=5, pady=4)
+        self.channel_order_var = tk.StringVar(value='pvv')
+        ttk.Combobox(phys, textvariable=self.channel_order_var, width=22,
+                     state='readonly',
+                     values=['pvv', 'vvp']).grid(row=0, column=1, padx=5)
+        ttk.Label(phys, text='pvv=(P,Vx,Vy)  vvp=(Vx,Vy,P)',
+                  foreground='red').grid(row=1, column=0, columnspan=3,
+                                         sticky=tk.W, padx=5)
+        self._entry_row(phys, 2, '计算域尺寸 Ly Lx:', 'domain_size', '1.0 1.0')
+        self._entry_row(phys, 3, '密度 rho:', 'rho', '1.0')
+        self._entry_row(phys, 4, '运动粘度 nu:', 'nu', '0.01')
+        self._entry_row(phys, 5, '散度权重:', 'div_weight', '0.05')
+        self._entry_row(phys, 6, '动量权重:', 'ns_weight', '0.005')
+        self._entry_row(phys, 7, '平滑权重:', 'smooth_weight', '0.005')
+        self._entry_row(phys, 8, '物理项预热比例:', 'physics_warmup', '0.1')
+        self.no_mask_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(phys, text='关闭 T 型掩码（在整幅网格上训练）',
+                        variable=self.no_mask_var).grid(
+            row=9, column=0, columnspan=3, sticky=tk.W, padx=5, pady=4)
+
+        # ---------------------------------------------------------- 超参
+        hyper = ttk.LabelFrame(form, text='训练超参数')
+        hyper.pack(fill=tk.X, pady=4, padx=4)
+        for i, (label, key, default) in enumerate([
+                ('总轮数 epochs:', 'epochs', '200'),
+                ('批大小 batch-size:', 'batch_size', '16'),
+                ('学习率 lr:', 'lr', '0.003'),
+                ('网络宽度 growth-rate:', 'growth_rate', '16'),
+                ('初始特征 init-features:', 'init_features', '48'),
+                ('权重衰减 weight-decay:', 'weight_decay', '0.0005'),
+                ('梯度裁剪 grad-clip:', 'grad_clip', '1.0'),
+                ('随机种子 seed:', 'seed', '1')]):
+            self._entry_row(hyper, i, label, key, default)
+
+        # ---------------------------------------------------------- 实验
+        exp = ttk.LabelFrame(form, text='实验管理')
+        exp.pack(fill=tk.X, pady=4, padx=4)
+        self._entry_row(exp, 0, '实验名:', 'exp_name', 'run01')
+        self._entry_row(exp, 1, '存档频率 ckpt-freq:', 'ckpt_freq', '50')
+        self._entry_row(exp, 2, '出图频率 plot-freq:', 'plot_freq', '50')
+
+        # ---------------------------------------------------------- 控制
+        control = ttk.Frame(form)
+        control.pack(fill=tk.X, pady=10, padx=4)
+        self.start_btn = ttk.Button(control, text='开始训练',
+                                    command=self.start_training)
+        self.start_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+        self.stop_btn = ttk.Button(control, text='停止训练',
+                                   command=self.stop_training, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+        ttk.Button(control, text='运行诊断',
+                   command=self.run_diagnose).pack(side=tk.LEFT, expand=True,
+                                                   fill=tk.X, padx=3)
+
+        # ---------------------------------------------------------- 监控
+        gpu = ttk.LabelFrame(form, text='硬件监控')
+        gpu.pack(fill=tk.X, pady=4, padx=4)
+        self.gpu_util_var = tk.StringVar(value='GPU 使用率: 获取中...')
+        ttk.Label(gpu, textvariable=self.gpu_util_var,
+                  font=('Consolas', 10, 'bold'), foreground='blue').pack(
+            anchor=tk.W, padx=5, pady=3)
+        self.gpu_mem_var = tk.StringVar(value='显存: 获取中...')
+        ttk.Label(gpu, textvariable=self.gpu_mem_var,
+                  font=('Consolas', 10, 'bold'), foreground='purple').pack(
+            anchor=tk.W, padx=5, pady=3)
         self.update_gpu_status()
 
-        # ================= 右侧: 终端输出 =================
-        log_frame = ttk.LabelFrame(right_frame, text="实时训练日志 (Console Output)")
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        self.console = scrolledtext.ScrolledText(log_frame, bg="black", fg="lightgreen", font=("Consolas", 12))
+        # ---------------------------------------------------------- 日志
+        log = ttk.LabelFrame(right, text='实时训练日志')
+        log.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.console = scrolledtext.ScrolledText(
+            log, bg='#101010', fg='#9CDCFE', font=('Consolas', 11),
+            insertbackground='white')
         self.console.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
+    def _entry_row(self, parent, row, label, key, default):
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky=tk.W,
+                                           padx=5, pady=3)
+        var = tk.StringVar(value=default)
+        self.vars[key] = var
+        ttk.Entry(parent, textvariable=var, width=24).grid(row=row, column=1,
+                                                           padx=5, sticky=tk.W)
+
+    def _file_row(self, parent, row, label, key, default):
+        self._entry_row(parent, row, label, key, default)
+        ttk.Button(parent, text='...', width=3,
+                   command=lambda k=key: self._browse(k)).grid(row=row, column=2,
+                                                               padx=2)
+
+    def _browse(self, key):
+        path = filedialog.askopenfilename(
+            initialdir=os.path.join(PROJECT_DIR, 'dataset'),
+            filetypes=[('HDF5', '*.hdf5 *.h5'), ('全部文件', '*.*')])
+        if path:
+            try:
+                path = os.path.relpath(path, PROJECT_DIR)
+            except ValueError:
+                pass
+            self.vars[key].set(path)
+
+    # -------------------------------------------------------------- GPU
     def update_gpu_status(self):
         try:
-            # 调用 nvidia-smi 提取单卡的 GPU 使用率、已用显存、总显存
-            smi_output = subprocess.check_output(
-                ['nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'],
-                encoding='utf-8'
-            )
-            lines = smi_output.strip().split('\n')
-            if lines:
-                util, mem_used, mem_total = lines[0].split(', ')
-                self.gpu_util_var.set(f"GPU 使用率: {util: >3} %")
-                self.gpu_mem_var.set(f"显存使用量: {mem_used: >5} / {mem_total} MB")
+            out = subprocess.check_output(
+                ['nvidia-smi',
+                 '--query-gpu=utilization.gpu,memory.used,memory.total',
+                 '--format=csv,noheader,nounits'],
+                encoding='utf-8', stderr=subprocess.DEVNULL)
+            util, used, total = out.strip().split('\n')[0].split(', ')
+            self.gpu_util_var.set('GPU 使用率: {:>3} %'.format(util))
+            self.gpu_mem_var.set('显存: {:>6} / {} MB'.format(used, total))
         except Exception:
-            self.gpu_util_var.set("GPU监控: 未检测到NVIDIA GPU或驱动异常")
-            self.gpu_mem_var.set("显存使用量: -- / -- MB")
-            
-        # 每 1.5 秒异步刷新一次状态
-        self.root.after(1500, self.update_gpu_status)
+            self.gpu_util_var.set('GPU: 未检测到 NVIDIA 设备（将使用 CPU）')
+            self.gpu_mem_var.set('显存: -- / -- MB')
+        self.root.after(2000, self.update_gpu_status)
+
+    # -------------------------------------------------------------- 训练
+    def build_command(self):
+        v = {k: var.get().strip() for k, var in self.vars.items()}
+        cmd = [sys.executable, '-u', 'train.py']
+
+        if v['train_file']:
+            cmd += ['--train-file', v['train_file']]
+        if v['test_file']:
+            cmd += ['--test-file', v['test_file']]
+        if self.use_3d_var.get():
+            cmd += ['--ndim', '3']
+        if self.no_mask_var.get():
+            cmd += ['--no-mask']
+
+        cmd += ['--channel-order', self.channel_order_var.get()]
+        if v['domain_size']:
+            cmd += ['--domain-size'] + v['domain_size'].replace(',', ' ').split()
+
+        simple = [('val_split', '--val-split'), ('rho', '--rho'), ('nu', '--nu'),
+                  ('div_weight', '--div-weight'), ('ns_weight', '--ns-weight'),
+                  ('smooth_weight', '--smooth-weight'),
+                  ('physics_warmup', '--physics-warmup'),
+                  ('epochs', '--epochs'), ('batch_size', '--batch-size'),
+                  ('lr', '--lr'), ('growth_rate', '--growth-rate'),
+                  ('init_features', '--init-features'),
+                  ('weight_decay', '--weight-decay'),
+                  ('grad_clip', '--grad-clip'), ('seed', '--seed'),
+                  ('exp_name', '--exp-name'), ('ckpt_freq', '--ckpt-freq'),
+                  ('plot_freq', '--plot-freq')]
+        for key, flag in simple:
+            if v.get(key):
+                cmd += [flag, v[key]]
+        return cmd
 
     def start_training(self):
         if self.process is not None and self.process.poll() is None:
-            messagebox.showwarning("警告", "训练任务已经在运行中！")
+            messagebox.showwarning('警告', '训练任务已经在运行中')
             return
-            
-        # 组装命令
-        cmd = ["python", "train.py"]
-        
-        if self.train_file_var.get().strip():
-            cmd.extend(["--train-file", self.train_file_var.get().strip()])
-        if self.test_file_var.get().strip():
-            cmd.extend(["--test-file", self.test_file_var.get().strip()])
-        if self.use_3d_var.get():
-            cmd.extend(["--ndim", "3"])
-            
-        cmd.extend([
-            "--epochs", self.epochs_var.get().strip(),
-            "--batch-size", self.batch_size_var.get().strip(),
-            "--lr", self.lr_var.get().strip(),
-            "--growth-rate", self.growth_rate_var.get().strip(),
-            "--weight-decay", self.wd_var.get().strip(),
-            "--exp-name", self.exp_name_var.get().strip(),
-            "--ckpt-freq", self.ckpt_freq_var.get().strip(),
-            "--plot-freq", self.ckpt_freq_var.get().strip() # 默认与保存频率一致
-        ])
-        
+        try:
+            cmd = self.build_command()
+        except Exception as exc:
+            messagebox.showerror('参数错误', str(exc))
+            return
+
         self.console.delete(1.0, tk.END)
-        self.console.insert(tk.END, "启动命令: " + " ".join(cmd) + "\n" + "-"*60 + "\n")
-        
+        self.console.insert(tk.END, '工作目录: {}\n启动命令: {}\n{}\n'
+                            .format(PROJECT_DIR, ' '.join(cmd), '-' * 68))
+        self._launch(cmd)
+
+    def run_diagnose(self):
+        if self.process is not None and self.process.poll() is None:
+            messagebox.showwarning('警告', '请先等训练进程结束')
+            return
+        self._launch([sys.executable, '-u', 'diagnose.py'])
+
+    def _launch(self, cmd):
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
-        
-        # 启动子进程
+        env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUNBUFFERED='1')
         try:
-            # 兼容 Windows和Linux，通过PIPE获取输出
             self.process = subprocess.Popen(
-                cmd, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.STDOUT, # 将 stderr 重定向到 stdout
-                text=True, 
-                bufsize=1, 
-                universal_newlines=True
-            )
-            
-            # 开启线程读取输出，防止阻塞 GUI
-            threading.Thread(target=self.read_output, args=(self.process,), daemon=True).start()
-            
-        except Exception as e:
-            self.console.insert(tk.END, f"启动失败: {str(e)}\n")
-            self.stop_training()
+                cmd, cwd=PROJECT_DIR, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, bufsize=1,
+                encoding='utf-8', errors='replace', env=env)
+        except Exception as exc:
+            self.console.insert(tk.END, '启动失败: {}\n'.format(exc))
+            self.start_btn.config(state=tk.NORMAL)
+            self.stop_btn.config(state=tk.DISABLED)
+            return
+        threading.Thread(target=self.read_output, args=(self.process,),
+                         daemon=True).start()
 
     def read_output(self, process):
-        for line in process.stdout:
-            self.output_queue.put(line)
-            
-        process.stdout.close()
-        process.wait()
-        self.output_queue.put(f"\n[{'='*20} 训练进程已结束 (Exit code: {process.returncode}) {'='*20}]\n")
+        try:
+            for line in process.stdout:
+                self.output_queue.put(line)
+        finally:
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
+            process.wait()
+            self.output_queue.put(
+                '\n[{} 进程结束 (exit code: {}) {}]\n'
+                .format('=' * 22, process.returncode, '=' * 22))
 
     def check_queue(self):
-        """定时检查队列，将内容更新到文本框（线程安全）"""
         while not self.output_queue.empty():
             line = self.output_queue.get()
             self.console.insert(tk.END, line)
             self.console.see(tk.END)
-            
-            # 如果捕捉到进程结束标记，恢复按钮状态
-            if "训练进程已结束" in line:
+            if '进程结束' in line:
                 self.start_btn.config(state=tk.NORMAL)
                 self.stop_btn.config(state=tk.DISABLED)
-
-        # 每 100 毫秒循环检查一次
         self.root.after(100, self.check_queue)
 
     def stop_training(self):
-        if self.process is not None and self.process.poll() is None:
-            self.process.terminate()
-            self.process = None
-            self.console.insert(tk.END, "\n[由于用户操作，进程已被强制终止！]\n")
-            
+        proc = self.process
+        if proc is not None and proc.poll() is None:
+            self.console.insert(tk.END, '\n[正在请求进程退出...]\n')
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.console.insert(tk.END, '[进程未响应，强制结束]\n')
+                proc.kill()
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
 
-if __name__ == "__main__":
+    def on_close(self):
+        if self.process is not None and self.process.poll() is None:
+            if not messagebox.askokcancel('退出', '训练仍在运行，确定要退出吗？'):
+                return
+            self.stop_training()
+        self.root.destroy()
+
+
+def main():
     root = tk.Tk()
-    
-    # 【提高清晰度】强制放大UI比例 (兼容Linux/Windows)
     try:
         root.tk.call('tk', 'scaling', 1.25)
     except Exception:
         pass
-
-    # 尝试应用更现代的主题与全局大字体
     style = ttk.Style()
     if 'clam' in style.theme_names():
         style.theme_use('clam')
-        
-    style.configure('.', font=('Microsoft YaHei', 11))
-    style.configure('TLabelframe.Label', font=('Microsoft YaHei', 11, 'bold'))
-        
-    app = FluidTrainerGUI(root)
+    for family in ('Microsoft YaHei', 'Noto Sans CJK SC', 'PingFang SC'):
+        try:
+            style.configure('.', font=(family, 10))
+            style.configure('TLabelframe.Label', font=(family, 10, 'bold'))
+            break
+        except Exception:
+            continue
+    FluidTrainerGUI(root)
     root.mainloop()
+
+
+if __name__ == '__main__':
+    main()
