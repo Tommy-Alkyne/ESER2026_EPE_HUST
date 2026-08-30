@@ -42,6 +42,7 @@ def new_logger():
         'r2_test_per_channel': [],
         'div_rms': [],
         'ns_rms': [],
+        'advdiff_rms': [],      # dispersion 任务的对流扩散残差
         'time': [],
     }
 

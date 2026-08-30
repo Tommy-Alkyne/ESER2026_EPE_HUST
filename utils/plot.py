@@ -169,7 +169,7 @@ def save_stats(save_dir, logger, x_axis=None):
            [('Train', logger.get('rmse_train', [])),
             ('Test', logger.get('rmse_test', []))], legend_loc='upper right')
 
-    for key in ('div_rms', 'ns_rms'):
+    for key in ('div_rms', 'ns_rms', 'advdiff_rms'):
         if logger.get(key):
             _curve(save_dir, key, key.replace('_', ' ').upper(),
                    [(key, logger[key])])

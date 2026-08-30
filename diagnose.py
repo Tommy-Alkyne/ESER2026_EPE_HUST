@@ -126,15 +126,30 @@ def check_configuration(cfg):
         ok('已按 val_split={} 切分验证集'.format(val_split))
 
     order = cfg.get('channel_order')
+    mappings = {'pvv': '(P, Vx, Vy)', 'vvp': '(Vx, Vy, P)',
+                'pvvt': '(P, Vx, Vy, T)', 'c': '(C,)'}
     if order:
-        mapping = '(P, Vx, Vy)' if order == 'pvv' else '(Vx, Vy, P)'
         warn('通道顺序设为 {} -> {}。请确认与数据集 output 的实际语义一致，'
-             '否则物理约束全部作用在错误通道上。'.format(order, mapping))
+             '否则物理约束全部作用在错误通道上。'
+             .format(order, mappings.get(order, '未知')))
     else:
         problems.append('args.txt 里没有 channel_order，可能是旧版实验产物')
 
+    task = cfg.get('task', 'flow')
+    if task == 'dispersion':
+        ok('污染物输运任务（对流扩散方程）')
+        if cfg.get('diffusivity') in (None, 1e-5):
+            warn('diffusivity 仍是默认值 1e-5，若与真实污染物不符，'
+                 '对流扩散残差的绝对量级就没有参考意义')
+        vch = cfg.get('velocity_channels')
+        if vch:
+            warn('速度场取自输入通道 {}。取错通道不会报错，只会让物理约束'
+                 '作用在错误的场上——请核对数据集的 input 通道顺序'.format(vch))
+    elif cfg.get('ns_weight') == 0:
+        ok('流场任务且 --ns-weight=0：只保留连续性方程，已跳过层流动量残差')
+
     if cfg.get('no_mask'):
-        warn('本次实验关闭了 T 型掩码（--no-mask），指标覆盖整幅网格')
+        warn('本次实验关闭了计算域掩码（--no-mask），指标覆盖整幅网格')
 
     if cfg.get('physics_in_physical_units') is False:
         warn('物理损失运行在归一化空间（--physics-in-physical-units false），'
@@ -214,12 +229,18 @@ def diagnose_quality(metrics):
         info('• ' + s)
 
 
-def main():
-    header('T 型流场代理模型 · 训练诊断')
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description='训练诊断报告')
+    ap.add_argument('--exp-dir', default='experiments',
+                    help='实验根目录，默认 experiments/')
+    opts = ap.parse_args(argv)
 
-    exp_dir = find_latest_experiment()
+    header('流场 / 污染物代理模型 · 训练诊断')
+
+    exp_dir = find_latest_experiment(opts.exp_dir)
     if exp_dir is None:
-        err('未找到实验目录（experiments/ 下需要有含 args.txt 的文件夹）')
+        err('未找到实验目录（{}/ 下需要有含 args.txt 的文件夹）'.format(opts.exp_dir))
         return 1
 
     info('实验目录: {}'.format(exp_dir))
@@ -229,11 +250,12 @@ def main():
     cfg = load_json(exp_dir / 'args.txt')
 
     header('实验配置')
-    for key in ('ndim', 'train_file', 'test_file', 'val_split', 'channel_order',
-                'epochs', 'batch_size', 'lr', 'weight_decay', 'blocks',
-                'growth_rate', 'init_features', 'div_weight', 'ns_weight',
-                'smooth_weight', 'domain_size', 'rho', 'nu', 'n_params',
-                'training_time'):
+    for key in ('ndim', 'task', 'train_file', 'test_file', 'val_split',
+                'channel_order', 'epochs', 'batch_size', 'lr', 'weight_decay',
+                'blocks', 'growth_rate', 'init_features', 'div_weight',
+                'ns_weight', 'advdiff_weight', 'smooth_weight', 'diffusivity',
+                'velocity_channels', 't_geometry', 'domain_size', 'rho', 'nu',
+                'n_params', 'training_time'):
         if key in cfg:
             print('  {:24s}: {}'.format(key, cfg[key]))
 
@@ -251,7 +273,7 @@ def main():
     if per_channel is not None:
         arr = np.atleast_2d(per_channel)
         metrics['r2_per_channel'] = arr[-1]
-    for key in ('div_rms', 'ns_rms'):
+    for key in ('div_rms', 'ns_rms', 'advdiff_rms'):
         series = load_series(train_dir, key)
         if series is not None:
             metrics[key] = float(series[-1])
@@ -289,8 +311,11 @@ def main():
     info('   残差行用以 0 为中心的对称色阶，接近纯白即拟合良好')
     info('2. 曲线图：{}/r2.pdf, {}/rmse.pdf, {}/r2_per_channel.pdf'
          .format(train_dir, train_dir, train_dir))
-    info('3. 物理残差曲线：{}/div_rms.pdf, {}/ns_rms.pdf'
-         .format(train_dir, train_dir))
+    if cfg.get('task') == 'dispersion':
+        info('3. 物理残差曲线：{}/advdiff_rms.pdf'.format(train_dir))
+    else:
+        info('3. 物理残差曲线：{}/div_rms.pdf, {}/ns_rms.pdf'
+             .format(train_dir, train_dir))
     info('4. 离线推理：python surrogate_predict.py --ckpt-file {}/model_best.pth '
          '--data-file <你的数据>'.format(ckpt_dir))
     return 0

@@ -25,6 +25,11 @@ import torch.nn.functional as F
 CHANNEL_ORDERS = {
     'pvv': {'p': 0, 'vx': 1, 'vy': 2},   # (P, Vx, Vy)  —— README / load_data 注释
     'vvp': {'vx': 0, 'vy': 1, 'p': 2},   # (Vx, Vy, P)  —— 旧版 physics_loss 的隐式假设
+    # 地铁站方案阶段一：多一个温度通道。T 只作为输出学习，**不参与任何残差**
+    # （方案文档 §3.5：去掉动量项后 Boussinesq 浮力项无处可放）。
+    'pvvt': {'p': 0, 'vx': 1, 'vy': 2, 't': 3},
+    # 地铁站方案阶段二：输出只有浓度一个通道，速度场从输入通道喂进来。
+    'c': {'c': 0},
 }
 
 
@@ -123,12 +128,19 @@ def erode_mask(mask, radius=1):
     3x3 差分模板在贴壁的格点上会取到墙外的值，如果直接在原掩码上评估物理残差，
     管外的数值就会从边界"漏"进损失里（实测能造成 50% 以上的偏差）。收缩一格后，
     每个评估点的整个模板都落在计算域内部，残差才是纯粹的域内物理量。
+
+    **图像边界也算域外**：旧实现直接用 ``max_pool2d(padding=radius)``，而它补的是
+    -inf，于是贴着图像边缘的格点根本腐蚀不掉——但那些格点的差分模板同样伸到了
+    图像外，取到的是 replicate padding 的重复值，一阶导被当成 0、二阶导则被放大
+    成 O(1/h)。默认 T 型几何的竖管正好贴着第 0 行与第 0 列，地铁站的站台层更是
+    横贯整幅网格，两者都会踩到。这里显式用 1（域外）补边再池化。
     """
     if mask is None or radius <= 0:
         return mask
     kernel = 2 * radius + 1
     inv = 1.0 - mask.to(dtype=torch.float32)
-    inv = F.max_pool2d(inv, kernel_size=kernel, stride=1, padding=radius)
+    inv = F.pad(inv, (radius,) * 4, mode='constant', value=1.0)
+    inv = F.max_pool2d(inv, kernel_size=kernel, stride=1, padding=0)
     return (1.0 - inv).to(dtype=mask.dtype)
 
 
@@ -203,24 +215,34 @@ def combined_physics_loss(output, target, mask=None, epoch=1, total_epochs=200,
                           div_weight=0.05, ns_weight=0.005, smooth_weight=0.005,
                           channel_order='pvv', y_min=None, y_max=None,
                           rho=1.0, nu=1e-2, dx=1.0, dy=1.0,
-                          physics_warmup=0.0, scales=None):
+                          physics_warmup=0.0, scales=None,
+                          task='flow', velocity=None, diffusivity=1e-5,
+                          advdiff_weight=0.05, dcdt=None, source=None):
     """数据项 + 物理项的组合损失。
 
     Args:
         output / target: (B, C, H, W) 或 (B, C, D, H, W) 的**归一化**场
         mask: 与 output 可广播的 0/1 计算域掩码
-        channel_order: 'pvv' 或 'vvp'，决定哪个通道是 P/Vx/Vy
+        channel_order: 决定哪个通道是什么物理量，见 `CHANNEL_ORDERS`
         y_min / y_max: 形状 (C,) 的逐通道极值；给了就在物理项里反归一化
         dx / dy: 真实网格间距（domain_size / (N-1)）
         rho / nu: 流体密度与运动粘度，需与数据集工况一致
         physics_warmup: 前多少比例的 epoch 完全不加物理约束（0~1）
-        scales: {'div':float,'ns':float,'smooth':float} 归一化因子。物理残差的
-            绝对量级随 dx/dy 和工况变化好几个数量级（dx=0.007 时散度残差轻松上
-            千），固定权重根本没法跨数据集复用。传入各项自身量级的估计（见
-            `PhysicsScaler`）后，权重就变成与量纲无关的相对强度。
+        scales: 各项量级归一化因子。物理残差的绝对量级随 dx/dy 和工况变化好几个
+            数量级（dx=0.007 时散度残差轻松上千），固定权重根本没法跨数据集复用。
+            传入各项自身量级的估计（见 `PhysicsScaler`）后，权重就变成与量纲无关
+            的相对强度。
+        task: 'flow' 走连续性方程 + N-S 动量；'dispersion' 走对流扩散方程。
+        velocity: 仅 dispersion 用。(vx, vy) 元组，**有量纲**速度场，来自网络
+            输入通道（两阶段架构里流场是阶段一的产物，不在 output 里）。
+        diffusivity / dcdt / source: 见 `utils.transport`。
+
+    权重为 0 的项**直接跳过计算**，不是算完再乘 0 —— 地铁站方案 §3.5 去掉动量
+    残差就是靠 `--ns-weight 0` 实现的，跳过才能真正省下算力。默认权重不变，
+    因此流场任务的行为与改动前逐位一致。
 
     Returns:
-        (total_loss, dict) —— dict 内 base/div/ns/smooth 为**未缩放**的原始值
+        (total_loss, dict) —— dict 内 base/div/ns/smooth/advdiff 为**未缩放**原始值
     """
     ch = resolve_channels(channel_order, output.shape[1])
 
@@ -241,13 +263,31 @@ def combined_physics_loss(output, target, mask=None, epoch=1, total_epochs=200,
     # 物理残差只在"模板完全落在域内"的格点上评估
     interior = erode_mask(mask4d, radius=1)
 
-    div_loss = divergence_loss(fields, interior, dx, dy)
-    ns_loss = navier_stokes_loss(fields, interior, rho, nu, dx, dy)
-    smooth = smoothness_loss(phys4d, interior, dx, dy)
-
     zero = output.sum() * 0.0            # 保持计算图连通的零张量
-    div_loss = zero if div_loss is None else div_loss
-    ns_loss = zero if ns_loss is None else ns_loss
+    div_loss = ns_loss = advdiff_loss = zero
+
+    if task == 'dispersion':
+        # 速度场来自输入通道，需要跟浓度场对齐成 4D
+        if velocity is not None:
+            vx, vy = velocity
+            vx4d, _ = as_4d(vx)
+            vy4d, _ = as_4d(vy)
+            fields['vx'], fields['vy'] = vx4d, vy4d
+        if advdiff_weight > 0:
+            from .transport import advection_diffusion_loss   # 局部导入打断循环依赖
+            got = advection_diffusion_loss(
+                fields, interior, diffusivity=diffusivity, dx=dx, dy=dy,
+                dcdt=dcdt, source=source)
+            advdiff_loss = zero if got is None else got
+    else:
+        if div_weight > 0:
+            got = divergence_loss(fields, interior, dx, dy)
+            div_loss = zero if got is None else got
+        if ns_weight > 0:
+            got = navier_stokes_loss(fields, interior, rho, nu, dx, dy)
+            ns_loss = zero if got is None else got
+
+    smooth = smoothness_loss(phys4d, interior, dx, dy)
 
     # 动态权重：早期先把数据拟合住，中后期逐步压紧物理约束
     progress = min(max(epoch / max(total_epochs, 1), 0.0), 1.0)
@@ -260,29 +300,35 @@ def combined_physics_loss(output, target, mask=None, epoch=1, total_epochs=200,
 
     w_div = div_weight * (1.0 + ramp)
     w_ns = ns_weight * (1.0 + ramp)
+    w_advdiff = advdiff_weight * (1.0 + ramp)
     w_smooth = smooth_weight * (1.0 - 0.5 * ramp)
 
     scales = scales or {}
     s_div = max(float(scales.get('div', 1.0)), 1e-12)
     s_ns = max(float(scales.get('ns', 1.0)), 1e-12)
+    s_advdiff = max(float(scales.get('advdiff', 1.0)), 1e-12)
     s_smooth = max(float(scales.get('smooth', 1.0)), 1e-12)
 
     total = (base_loss
              + w_div * div_loss / s_div
              + w_ns * ns_loss / s_ns
+             + w_advdiff * advdiff_loss / s_advdiff
              + w_smooth * smooth / s_smooth)
 
     return total, {
         'base': float(base_loss.detach()),
         'div': float(div_loss.detach()),
         'ns': float(ns_loss.detach()),
+        'advdiff': float(advdiff_loss.detach()),
         'smooth': float(smooth.detach()),
         'total': float(total.detach()),
         'w_div': w_div,
         'w_ns': w_ns,
+        'w_advdiff': w_advdiff,
         'w_smooth': w_smooth,
         'scale_div': s_div,
         'scale_ns': s_ns,
+        'scale_advdiff': s_advdiff,
         'scale_smooth': s_smooth,
     }
 
@@ -294,7 +340,8 @@ class PhysicsScaler:
     "压垮数据项"，因为残差量级随 1/dx、1/dx^2 变化。
     """
 
-    def __init__(self, momentum=0.99, enabled=True, keys=('div', 'ns', 'smooth')):
+    def __init__(self, momentum=0.99, enabled=True,
+                 keys=('div', 'ns', 'advdiff', 'smooth')):
         self.momentum = momentum
         self.enabled = enabled
         self.keys = tuple(keys)
@@ -324,8 +371,13 @@ def np_isfinite(value):
 
 
 def physics_report(output, mask=None, channel_order='pvv', y_min=None, y_max=None,
-                   rho=1.0, nu=1e-2, dx=1.0, dy=1.0):
-    """诊断用：返回有量纲的散度 / 动量残差 RMS，判断物理约束是否真的生效。"""
+                   rho=1.0, nu=1e-2, dx=1.0, dy=1.0,
+                   task='flow', velocity=None, diffusivity=1e-5,
+                   dcdt=None, source=None):
+    """诊断用：返回有量纲的物理残差 RMS，判断物理约束是否真的生效。
+
+    'flow' 报散度 / 动量残差；'dispersion' 报对流扩散残差。未计算的项为 nan。
+    """
     with torch.no_grad():
         ch = resolve_channels(channel_order, output.shape[1])
         phys4d, _ = as_4d(denormalize(output, y_min, y_max))
@@ -336,9 +388,26 @@ def physics_report(output, mask=None, channel_order='pvv', y_min=None, y_max=Non
             mask4d = _single_channel_mask(m4d)
         fields = {name: phys4d[:, i:i + 1] for name, i in ch.items()}
         interior = erode_mask(mask4d, radius=1)
+
+        report = {'div_rms': float('nan'), 'ns_rms': float('nan'),
+                  'advdiff_rms': float('nan')}
+
+        if task == 'dispersion':
+            if velocity is not None:
+                vx, vy = velocity
+                fields['vx'], _ = as_4d(vx)
+                fields['vy'], _ = as_4d(vy)
+            from .transport import advection_diffusion_loss   # 打断循环依赖
+            a = advection_diffusion_loss(fields, interior, diffusivity=diffusivity,
+                                         dx=dx, dy=dy, dcdt=dcdt, source=source)
+            if a is not None:
+                report['advdiff_rms'] = float(a.sqrt())
+            return report
+
         d = divergence_loss(fields, interior, dx, dy)
         n = navier_stokes_loss(fields, interior, rho, nu, dx, dy)
-        return {
-            'div_rms': float(d.sqrt()) if d is not None else float('nan'),
-            'ns_rms': float(n.sqrt()) if n is not None else float('nan'),
-        }
+        if d is not None:
+            report['div_rms'] = float(d.sqrt())
+        if n is not None:
+            report['ns_rms'] = float(n.sqrt())
+        return report

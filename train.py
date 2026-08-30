@@ -53,7 +53,7 @@ from utils.data_common import compute_output_stats                    # noqa: E4
 from utils.geometry import mask_coverage, parse_geometry, t_mask_like  # noqa: E402
 from utils.misc import RunningMetrics, mkdirs, new_logger             # noqa: E402
 from utils.physics_loss import (PhysicsScaler, combined_physics_loss,  # noqa: E402
-                                physics_report)
+                                physics_report, resolve_channels)
 from utils.plot import plot_prediction, save_stats                    # noqa: E402
 
 
@@ -129,17 +129,31 @@ geometry = None if args.no_mask else parse_geometry(args.t_geometry)
 
 print('[train] 网格间距 dx={:.6g} dy={:.6g}（domain_size={}）'
       .format(dx, dy, args.domain_size))
-print('[train] 通道顺序 --channel-order={} -> {}'.format(
-    args.channel_order,
-    '(P, Vx, Vy)' if args.channel_order == 'pvv' else '(Vx, Vy, P)'))
+_ch_map = resolve_channels(args.channel_order, args.noc)
+print('[train] 物理任务 --task={} · 通道顺序 --channel-order={} -> {}'.format(
+    args.task, args.channel_order,
+    ', '.join('{}={}'.format(k.upper(), v) for k, v in sorted(
+        _ch_map.items(), key=lambda kv: kv[1]))))
 print('!!! 请确认该顺序与数据集 output 的实际通道语义一致，'
       '否则所有物理约束都作用在错误的通道上 !!!')
+if args.task == 'dispersion':
+    print('[train] 对流扩散：D={:.3g} · 速度取自输入通道 {} · 权重={}'.format(
+        args.diffusivity, args.velocity_channels, args.advdiff_weight))
+else:
+    if args.ns_weight <= 0:
+        print('[train] --ns-weight=0，跳过 N-S 动量残差（只保留连续性方程）。'
+              '高雷诺数 RANS 时均场用层流动量残差会把模型往错误方向拉，'
+              '要恢复需 CFD 导出湍流粘度场并改用有效粘度')
+    if args.div_weight <= 0:
+        print('[train] --div-weight=0，跳过连续性方程残差')
 if geometry is not None:
-    print('[train] T 型掩码覆盖率 {:.1%} @ {}x{}'.format(
-        mask_coverage(int(grid_hw[0]), int(grid_hw[1]), geometry),
+    import numpy as _np
+    _kind = '栅格' if isinstance(geometry, _np.ndarray) else '矩形段'
+    print('[train] 计算域掩码（{}）覆盖率 {:.1%} @ {}x{}'.format(
+        _kind, mask_coverage(int(grid_hw[0]), int(grid_hw[1]), geometry),
         int(grid_hw[0]), int(grid_hw[1])))
 else:
-    print('[train] 已关闭 T 型掩码（--no-mask），在整幅网格上训练')
+    print('[train] 已关闭计算域掩码（--no-mask），在整幅网格上训练')
 
 
 # ------------------------------------------------------------------ 数据
@@ -195,6 +209,23 @@ logger = new_logger()
 physics_scaler = PhysicsScaler(enabled=(args.physics_loss_scaling == 'ema'))
 
 
+def extract_velocity(inputs):
+    """dispersion 任务下，从**输入**张量里取出速度场 (Vx, Vy)。
+
+    两阶段架构里流场是阶段一的产物，作为输入通道喂给阶段二，不在 output 里。
+    输入不参与 target 的归一化流程（loader 只归一化 output），因此这里拿到的
+    就是有量纲的物理速度，可直接送进对流扩散残差。
+    """
+    if args.task != 'dispersion':
+        return None
+    ix, iy = args.velocity_channels
+    if inputs.shape[1] <= max(ix, iy):
+        raise ValueError(
+            '--velocity-channels {} 超出输入通道数 {}，请检查数据集或该参数'
+            .format(args.velocity_channels, inputs.shape[1]))
+    return inputs[:, ix:ix + 1], inputs[:, iy:iy + 1]
+
+
 def build_mask(tensor):
     if geometry is None:
         return None
@@ -218,10 +249,21 @@ def save_checkpoint(epoch, path=None):
 
 # ------------------------------------------------------------------ 评估
 @torch.no_grad()
+def log_physics(logger, report):
+    """只记录当前任务真正计算了的物理残差，跳过 nan。
+
+    把 dispersion 的残差硬塞进 div_rms 会让曲线图和历史数据串味，所以按 key 各归各位。
+    """
+    for key in ('div_rms', 'ns_rms', 'advdiff_rms'):
+        value = report.get(key, float('nan'))
+        if value == value:                      # 非 nan
+            logger[key].append(value)
+
+
 def evaluate(epoch, do_plot=False):
     model.eval()
     metrics = RunningMetrics(args.noc)
-    div_rms, ns_rms, n_batches = 0.0, 0.0, 0
+    phys = {}
 
     for batch_idx, (inputs, targets) in enumerate(test_loader):
         inputs, targets = inputs.to(device), targets.to(device)
@@ -231,8 +273,11 @@ def evaluate(epoch, do_plot=False):
 
         if batch_idx == 0:
             report = physics_report(outputs, mask, args.channel_order,
-                                    phys_min, phys_max, args.rho, args.nu, dx, dy)
-            div_rms, ns_rms, n_batches = report['div_rms'], report['ns_rms'], 1
+                                    phys_min, phys_max, args.rho, args.nu, dx, dy,
+                                    task=args.task,
+                                    velocity=extract_velocity(inputs),
+                                    diffusivity=args.diffusivity)
+            phys = report
 
         if do_plot and batch_idx == 0:
             n_samples = min(6 if epoch >= args.epochs else 2, inputs.size(0))
@@ -244,15 +289,15 @@ def evaluate(epoch, do_plot=False):
                                 epoch, i, plot_fn=args.plot_fn,
                                 channel_order=args.channel_order, mask=mask_np)
 
-    del n_batches
-    return metrics, div_rms, ns_rms
+    return metrics, phys
 
 
 # ------------------------------------------------------------------ 训练
 def train_one_epoch(epoch):
     model.train()
     metrics = RunningMetrics(args.noc)
-    accum = {'base': 0.0, 'div': 0.0, 'ns': 0.0, 'smooth': 0.0, 'total': 0.0}
+    accum = {'base': 0.0, 'div': 0.0, 'ns': 0.0, 'advdiff': 0.0,
+             'smooth': 0.0, 'total': 0.0}
     n_batches = 0
 
     for inputs, targets in train_loader:
@@ -267,7 +312,9 @@ def train_one_epoch(epoch):
             smooth_weight=args.smooth_weight, channel_order=args.channel_order,
             y_min=phys_min, y_max=phys_max, rho=args.rho, nu=args.nu,
             dx=dx, dy=dy, physics_warmup=args.physics_warmup,
-            scales=physics_scaler.current())
+            scales=physics_scaler.current(),
+            task=args.task, velocity=extract_velocity(inputs),
+            diffusivity=args.diffusivity, advdiff_weight=args.advdiff_weight)
         physics_scaler.update(parts)
 
         if not torch.isfinite(loss):
@@ -310,12 +357,11 @@ def main():
         else:
             print('[post] 警告：找不到 {}，使用当前（未训练）权重'.format(ckpt_path))
 
-        metrics, div_rms, ns_rms = evaluate(ckpt_epoch, do_plot=True)
+        metrics, phys = evaluate(ckpt_epoch, do_plot=True)
         logger['r2_test'].append(metrics.r2())
         logger['rmse_test'].append(metrics.rmse())
         logger['r2_test_per_channel'].append(metrics.r2_per_channel().tolist())
-        logger['div_rms'].append(div_rms)
-        logger['ns_rms'].append(ns_rms)
+        log_physics(logger, phys)
         print('[post] R²={:.6f}  RMSE={:.6f}  分通道 R²={}'
               .format(metrics.r2(), metrics.rmse(),
                       np.round(metrics.r2_per_channel(), 4).tolist()))
@@ -323,17 +369,22 @@ def main():
         for epoch in range(1, args.epochs + 1):
             train_metrics, parts = train_one_epoch(epoch)
             do_plot = (epoch % args.plot_freq == 0) or (epoch == args.epochs)
-            test_metrics, div_rms, ns_rms = evaluate(epoch, do_plot=do_plot)
+            test_metrics, phys = evaluate(epoch, do_plot=do_plot)
 
             # 学习率按**验证** RMSE 调度（旧版用的是训练 RMSE）
             scheduler.step(test_metrics.rmse())
 
+            # 只打当前任务真正参与的物理项，否则一排恒为 0 的数字反而掩盖信息
+            if args.task == 'dispersion':
+                phys_txt = 'advdiff={:.3e}'.format(parts['advdiff'])
+            else:
+                phys_txt = 'div={:.3e} ns={:.3e}'.format(parts['div'], parts['ns'])
             print('epoch {:>4}｜train R²={:.5f} RMSE={:.5f}｜'
                   'test R²={:.5f} RMSE={:.5f}｜'
-                  'base={:.4e} div={:.3e} ns={:.3e} smooth={:.3e}｜lr={:.2e}'
+                  'base={:.4e} {} smooth={:.3e}｜lr={:.2e}'
                   .format(epoch, train_metrics.r2(), train_metrics.rmse(),
                           test_metrics.r2(), test_metrics.rmse(),
-                          parts['base'], parts['div'], parts['ns'],
+                          parts['base'], phys_txt,
                           parts['smooth'], optimizer.param_groups[0]['lr']))
 
             if epoch % args.log_freq == 0 or epoch == args.epochs:
@@ -343,8 +394,7 @@ def main():
                 logger['rmse_test'].append(test_metrics.rmse())
                 logger['r2_test_per_channel'].append(
                     test_metrics.r2_per_channel().tolist())
-                logger['div_rms'].append(div_rms)
-                logger['ns_rms'].append(ns_rms)
+                log_physics(logger, phys)
 
             if epoch % args.ckpt_freq == 0 or epoch == args.epochs:
                 save_checkpoint(epoch)

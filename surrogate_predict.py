@@ -48,9 +48,12 @@ def parse_args(argv=None):
     p.add_argument('--keep-normalized', dest='denormalize', action='store_false',
                    help='保留 [0,1] 归一化输出')
     p.add_argument('--apply-mask', dest='apply_mask', action='store_true',
-                   default=True, help='把 T 型域外置零（默认）')
+                   default=True, help='把计算域外置零（默认）')
     p.add_argument('--no-mask', dest='apply_mask', action='store_false')
-    p.add_argument('--t-geometry', type=str, default=None)
+    p.add_argument('--t-geometry', '--domain-mask', dest='t_geometry',
+                   type=str, default=None,
+                   help='覆盖计算域几何。**缺省沿用 checkpoint 里训练时用的那份**，'
+                        '只有明确要换几何时才需要指定')
     p.add_argument('--input-key', type=str, default=None)
     p.add_argument('--prefer-sensor-input', action='store_true', default=False)
 
@@ -64,11 +67,16 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
+# checkpoint 里能被读回来的超参白名单。**不在这里的键会被静默丢弃**——
+# t_geometry / no_mask 曾经就漏在外面，导致推理拿默认 T 型几何去裁剪一个
+# 车站模型的输出，覆盖率 45% vs 25%，而且一句警告都没有。
 DEFAULT_HP = {
     'blocks': [3, 6, 3], 'growth_rate': 16, 'init_features': 48,
     'drop_rate': 0.0, 'bn_size': 8, 'bottleneck': False, 'num_heads': 4,
     'attn_max_tokens': 8192, 'no_positional_encoding': False,
     'channel_order': 'pvv',
+    'task': 'flow', 'diffusivity': 1e-5,
+    't_geometry': None, 'no_mask': False,
 }
 
 
@@ -202,11 +210,24 @@ def main(argv=None):
         print('[predict] 已反归一化回物理量纲')
 
     if args.apply_mask:
-        geometry = parse_geometry(args.t_geometry)
-        h, w = preds.shape[-2:]
-        mask = t_mask_numpy(h, w, geometry).astype(bool)
-        preds[..., ~mask] = 0.0
-        print('[predict] T 型掩码覆盖率 {:.1%} @ {}x{}'.format(mask.mean(), h, w))
+        # 几何必须跟训练时一致，否则推理会按另一个计算域裁剪结果，而且不会报错。
+        # 与 --channel-order 同理：缺省从 checkpoint 读，命令行只作为显式覆盖。
+        geom_spec = args.t_geometry
+        source = '命令行'
+        if geom_spec is None:
+            if hp.get('no_mask'):
+                geom_spec, source = None, '训练时未用掩码'
+            else:
+                geom_spec, source = hp.get('t_geometry'), 'checkpoint'
+        if source == '训练时未用掩码':
+            print('[predict] 训练时用的是 --no-mask，跳过掩码以保持一致')
+        else:
+            geometry = parse_geometry(geom_spec)
+            h, w = preds.shape[-2:]
+            mask = t_mask_numpy(h, w, geometry).astype(bool)
+            preds[..., ~mask] = 0.0
+            print('[predict] 计算域掩码（来源：{}）覆盖率 {:.1%} @ {}x{}'
+                  .format(source, mask.mean(), h, w))
 
     out_file = args.out_file
     if out_file is None:

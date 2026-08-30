@@ -26,17 +26,33 @@ DEFAULT_T_GEOMETRY = {
 
 
 def parse_geometry(spec):
-    """把 --t-geometry 的取值解析成几何字典。
+    """把 --t-geometry / --domain-mask 的取值解析成几何定义。
 
     Args:
         spec: None / dict / JSON 字符串 / 指向 JSON 文件的路径
+              / 指向 `.npy` 栅格掩码的路径 / 直接给 ndarray
+
+    Returns:
+        矩形段字典（管道类几何），或 (H0, W0) 的 0/1 ndarray（任意形状几何，
+        如地铁站平面）。两种形态由下游 `t_mask_numpy` 统一处理。
+
+    地铁站这类平面用矩形段拼不出来（楼梯、弧形站厅、设备房），所以支持直接从
+    GIS / CAD 导出的栅格读入。存成 `.npy` 而不是 GeoTIFF，是为了不引入 rasterio
+    依赖；分辨率不必与训练网格一致，会做最近邻重采样。
     """
+    # ndarray 必须最先判断：`spec == ''` 对数组是逐元素比较，会抛
+    # "truth value of an array is ambiguous"。train.py 会把解析结果再传回来
+    # （幂等复用），所以这条路径一定会被走到。
+    if isinstance(spec, np.ndarray):
+        return spec
     if spec is None or spec == '':
         return dict(DEFAULT_T_GEOMETRY)
     if isinstance(spec, dict):
         return {k: tuple(float(v) for v in vals) for k, vals in spec.items()}
     if isinstance(spec, str):
         text = spec.strip()
+        if text.lower().endswith('.npy'):
+            return np.load(text)
         if not text.startswith('{'):
             with open(text, 'r', encoding='utf-8') as fh:
                 text = fh.read()
@@ -46,6 +62,18 @@ def parse_geometry(spec):
 
 
 def validate_geometry(geometry):
+    if isinstance(geometry, np.ndarray):
+        if geometry.ndim != 2:
+            raise ValueError(
+                '栅格掩码必须是 2D (H, W)，当前 shape={}'.format(geometry.shape))
+        uniq = np.unique(geometry)
+        if not np.all(np.isin(uniq, (0, 1))):
+            raise ValueError(
+                '栅格掩码只能含 0/1，当前取值 {}'.format(uniq[:8]))
+        if geometry.sum() == 0:
+            raise ValueError('栅格掩码全为 0，计算域为空')
+        return geometry
+
     for name, box in geometry.items():
         if len(box) != 4:
             raise ValueError('几何段 {} 必须是 (y0, y1, x0, x1) 四元组'.format(name))
@@ -58,9 +86,30 @@ def validate_geometry(geometry):
     return geometry
 
 
+def _resample_mask(mask, h, w, dtype=np.float32):
+    """最近邻重采样到 (h, w)。
+
+    掩码是 0/1 的，任何插值都会在边界造出 0.5 这种没有物理意义的值，所以只能
+    用最近邻。
+    """
+    src_h, src_w = mask.shape
+    yi = np.clip((np.arange(h) * src_h) // max(h, 1), 0, src_h - 1)
+    xi = np.clip((np.arange(w) * src_w) // max(w, 1), 0, src_w - 1)
+    return mask[yi][:, xi].astype(dtype)
+
+
 def t_mask_numpy(h, w, geometry=None, dtype=np.float32):
     """生成 (H, W) 的 0/1 掩码。任意分辨率下覆盖同一物理区域。"""
     geometry = validate_geometry(parse_geometry(geometry))
+
+    if isinstance(geometry, np.ndarray):
+        mask = _resample_mask(geometry, h, w, dtype)
+        if mask.sum() == 0:
+            raise ValueError(
+                '栅格掩码重采样到 {}x{} 后为空，说明目标网格远粗于掩码里的通道宽度'
+                .format(h, w))
+        return mask
+
     mask = np.zeros((h, w), dtype=dtype)
     for y0f, y1f, x0f, x1f in geometry.values():
         y0, y1 = int(round(y0f * h)), int(round(y1f * h))

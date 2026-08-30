@@ -54,10 +54,24 @@ class CFDHDF5Dataset(Dataset):
             self._file = h5py.File(self.data_dir, 'r')
         return self._file
 
+    def close(self):
+        """显式释放 HDF5 句柄。
+
+        只靠 `__del__` 在 Windows 上不可靠：句柄没关时删除所在目录会抛
+        WinError 32，而 `__del__` 的触发时机取决于解释器回收，测试和批处理里
+        都会踩到。需要确定性释放的场合请显式调用。
+        """
+        if self._file is not None:
+            try:
+                self._file.close()
+            except Exception:
+                pass
+            finally:
+                self._file = None
+
     def __del__(self):
         try:
-            if self._file is not None:
-                self._file.close()
+            self.close()
         except Exception:
             pass
 

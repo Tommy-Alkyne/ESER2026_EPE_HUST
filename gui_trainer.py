@@ -75,26 +75,40 @@ class FluidTrainerGUI:
         # ---------------------------------------------------------- 物理
         phys = ttk.LabelFrame(form, text='物理设置（PINN）')
         phys.pack(fill=tk.X, pady=4, padx=4)
-        ttk.Label(phys, text='通道顺序:').grid(row=0, column=0, sticky=tk.W,
+        ttk.Label(phys, text='物理任务:').grid(row=0, column=0, sticky=tk.W,
+                                           padx=5, pady=4)
+        self.task_var = tk.StringVar(value='flow')
+        ttk.Combobox(phys, textvariable=self.task_var, width=22,
+                     state='readonly',
+                     values=['flow', 'dispersion']).grid(row=0, column=1, padx=5)
+        ttk.Label(phys, text='flow=流场(连续性+动量)  dispersion=污染物输运(对流扩散)',
+                  foreground='gray').grid(row=1, column=0, columnspan=3,
+                                          sticky=tk.W, padx=5)
+
+        ttk.Label(phys, text='通道顺序:').grid(row=2, column=0, sticky=tk.W,
                                            padx=5, pady=4)
         self.channel_order_var = tk.StringVar(value='pvv')
         ttk.Combobox(phys, textvariable=self.channel_order_var, width=22,
                      state='readonly',
-                     values=['pvv', 'vvp']).grid(row=0, column=1, padx=5)
-        ttk.Label(phys, text='pvv=(P,Vx,Vy)  vvp=(Vx,Vy,P)',
-                  foreground='red').grid(row=1, column=0, columnspan=3,
+                     values=['pvv', 'vvp', 'pvvt', 'c']).grid(row=2, column=1,
+                                                              padx=5)
+        ttk.Label(phys, text='pvv=(P,Vx,Vy) vvp=(Vx,Vy,P) pvvt=(P,Vx,Vy,T) c=(C,)',
+                  foreground='red').grid(row=3, column=0, columnspan=3,
                                          sticky=tk.W, padx=5)
-        self._entry_row(phys, 2, '计算域尺寸 Ly Lx:', 'domain_size', '1.0 1.0')
-        self._entry_row(phys, 3, '密度 rho:', 'rho', '1.0')
-        self._entry_row(phys, 4, '运动粘度 nu:', 'nu', '0.01')
-        self._entry_row(phys, 5, '散度权重:', 'div_weight', '0.05')
-        self._entry_row(phys, 6, '动量权重:', 'ns_weight', '0.005')
-        self._entry_row(phys, 7, '平滑权重:', 'smooth_weight', '0.005')
-        self._entry_row(phys, 8, '物理项预热比例:', 'physics_warmup', '0.1')
+        self._entry_row(phys, 4, '计算域尺寸 Ly Lx:', 'domain_size', '1.0 1.0')
+        self._file_row(phys, 5, '计算域掩码(.npy/.json):', 't_geometry', '')
+        self._entry_row(phys, 6, '密度 rho:', 'rho', '1.0')
+        self._entry_row(phys, 7, '运动粘度 nu:', 'nu', '0.01')
+        self._entry_row(phys, 8, '散度权重:', 'div_weight', '0.05')
+        self._entry_row(phys, 9, '动量权重(0=跳过):', 'ns_weight', '0.005')
+        self._entry_row(phys, 10, '扩散系数 D:', 'diffusivity', '1e-5')
+        self._entry_row(phys, 11, '对流扩散权重:', 'advdiff_weight', '0.05')
+        self._entry_row(phys, 12, '平滑权重:', 'smooth_weight', '0.005')
+        self._entry_row(phys, 13, '物理项预热比例:', 'physics_warmup', '0.1')
         self.no_mask_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(phys, text='关闭 T 型掩码（在整幅网格上训练）',
+        ttk.Checkbutton(phys, text='关闭计算域掩码（在整幅网格上训练）',
                         variable=self.no_mask_var).grid(
-            row=9, column=0, columnspan=3, sticky=tk.W, padx=5, pady=4)
+            row=14, column=0, columnspan=3, sticky=tk.W, padx=5, pady=4)
 
         # ---------------------------------------------------------- 超参
         hyper = ttk.LabelFrame(form, text='训练超参数')
@@ -166,9 +180,14 @@ class FluidTrainerGUI:
                                                                padx=2)
 
     def _browse(self, key):
+        # 掩码字段选的是 .npy / .json，不是数据集，过滤器要跟着换
+        if key == 't_geometry':
+            types = [('掩码/几何', '*.npy *.json'), ('全部文件', '*.*')]
+        else:
+            types = [('HDF5', '*.hdf5 *.h5'), ('全部文件', '*.*')]
         path = filedialog.askopenfilename(
             initialdir=os.path.join(PROJECT_DIR, 'dataset'),
-            filetypes=[('HDF5', '*.hdf5 *.h5'), ('全部文件', '*.*')])
+            filetypes=types)
         if path:
             try:
                 path = os.path.relpath(path, PROJECT_DIR)
@@ -206,6 +225,7 @@ class FluidTrainerGUI:
         if self.no_mask_var.get():
             cmd += ['--no-mask']
 
+        cmd += ['--task', self.task_var.get()]
         cmd += ['--channel-order', self.channel_order_var.get()]
         if v['domain_size']:
             cmd += ['--domain-size'] + v['domain_size'].replace(',', ' ').split()
@@ -213,6 +233,9 @@ class FluidTrainerGUI:
         simple = [('val_split', '--val-split'), ('rho', '--rho'), ('nu', '--nu'),
                   ('div_weight', '--div-weight'), ('ns_weight', '--ns-weight'),
                   ('smooth_weight', '--smooth-weight'),
+                  ('diffusivity', '--diffusivity'),
+                  ('advdiff_weight', '--advdiff-weight'),
+                  ('t_geometry', '--domain-mask'),
                   ('physics_warmup', '--physics-warmup'),
                   ('epochs', '--epochs'), ('batch_size', '--batch-size'),
                   ('lr', '--lr'), ('growth_rate', '--growth-rate'),

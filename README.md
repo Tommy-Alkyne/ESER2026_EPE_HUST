@@ -89,16 +89,18 @@ python train.py --t-geometry '{"vertical":[0.0,0.99,0.0,0.26],"horizontal":[0.37
 │   ├── dense_ed.py             # 2D DenseED + skip + Transformer
 │   └── dense_ed_3d.py          # 3D 体素版本
 ├── utils/
-│   ├── geometry.py             # T 型几何定义（归一化比例，全项目唯一真源）
+│   ├── geometry.py             # 计算域几何（矩形段比例 或 .npy 栅格，唯一真源）
 │   ├── data_common.py          # 全量统计、归一化/反归一化、数据划分
 │   ├── load_data.py            # 2D 加载器（惰性 HDF5，句柄按 worker 缓存）
 │   ├── load_data_3d.py         # 3D 加载器（签名与 2D 完全一致）
 │   ├── physics_loss.py         # 散度 / N-S 动量 / 平滑 / 重建 + 量级归一化
+│   ├── transport.py            # 对流扩散残差（污染物输运，--task dispersion）
 │   ├── misc.py                 # 目录工具 + 分通道 R²/RMSE 累计器
 │   └── plot.py / plot_3d.py    # 预测对比图与训练曲线（3D 版直接复用 2D 实现）
 ├── tests/
 │   ├── make_fake_data.py       # 生成合成数据集，用于冒烟测试
-│   └── test_regressions.py     # 63 项回归测试，覆盖审查报告每一条问题
+│   ├── test_regressions.py     # 63 项回归测试，覆盖审查报告每一条问题
+│   └── test_transport.py       # 39 项对流扩散 / 栅格掩码测试（含解析解验证）
 ├── train.py                    # 主训练脚本
 ├── surrogate_predict.py        # 离线推理（输出反归一化回物理量纲）
 ├── diagnose.py                 # 诊断报告（含配置合理性检查）
@@ -147,6 +149,34 @@ python train.py --ndim 3 --train-file dataset/10243d.hdf5
 python gui_trainer.py
 ```
 
+#### 污染物输运（两阶段）
+
+除了流场，代码也支持污染物浓度场的对流扩散代理模型。流场只取决于通风工况、
+且是稳态的；浓度场取决于流场 + 源、且是瞬态的。绑在一个网络里等于让不变的
+东西陪着变的东西重算，所以分两阶段——换个泄漏点位时**阶段一不用重跑**。
+
+```bash
+# 阶段一：工况 -> (P, Vx, Vy, T)。高 Re 湍流下层流动量残差不成立，用 --ns-weight 0
+#         关掉，只保留连续性方程（它对不可压缩 RANS 时均场严格成立）
+python train.py --task flow --channel-order pvvt --ns-weight 0                 --train-file dataset/stage1.hdf5                 --domain-mask dataset/station_mask.npy                 --domain-size 12.0 60.0 --blocks "[3,4,6,4,3]"
+
+# 阶段二：(Vx, Vy, 源位置图, t) -> C
+python train.py --task dispersion --channel-order c                 --train-file dataset/stage2.hdf5                 --diffusivity 2e-5 --velocity-channels 0 1                 --domain-mask dataset/station_mask.npy                 --domain-size 12.0 60.0 --blocks "[3,4,6,4,3]"
+```
+
+几个要点：
+
+- **速度场从输入通道来，不在 output 里**（`--velocity-channels` 指定位置）。
+  取错通道不报错，只会让物理约束作用在错误的场上。
+- **时刻 t 是一个输入通道**（广播成常数图）。稳态就是不给 t，同一套代码覆盖
+  稳态与瞬态，没有自回归 rollout 的误差累积。
+- **源强不用作为变量采样**：被动标量下方程对 C 是线性的，训练时源强固定为 1，
+  使用时线性缩放即可。前提是污染物本身不是浮力源（火灾烟气不适用）。
+- **`--blocks` 要够深**：512×512 用默认 `[3,6,3]` 时瓶颈是 128×128=16384 token，
+  超过 `--attn-max-tokens` 会被静默跳过，注意力层白加。`[3,4,6,4,3]` 降到 4096。
+- 掩码用 `.npy` 栅格（0/1 数组，分辨率不必与训练网格一致，做最近邻重采样），
+  站厅/站台这类平面用矩形段拼不出来。
+
 > **测试集会强制复用训练集的归一化统计量**，两边标度一致，R² 才有可比性。
 
 常用参数：
@@ -161,6 +191,11 @@ python gui_trainer.py
 | `--grad-clip` | 1.0 | 梯度范数裁剪；PINN 的二阶项容易发散 |
 | `--plot-fn` | imshow | `contourf` 也已修好色阶对齐，但 imshow 更快更准 |
 | `--no-mask` | 关 | 在整幅网格上训练与评估 |
+| `--task` | flow | `flow`=流场（连续性+动量）；`dispersion`=污染物输运（对流扩散） |
+| `--domain-mask` | 无 | 计算域掩码，可给 `.npy` 栅格（任意形状）或 JSON 矩形段；`--t-geometry` 的别名 |
+| `--diffusivity` | 1e-5 | 扩散系数 D（`dispersion` 用） |
+| `--advdiff-weight` | 0.05 | 对流扩散残差权重 |
+| `--velocity-channels` | 0 1 | `dispersion` 下速度场在**输入**张量的哪两个通道 |
 
 ### 4. 诊断
 
@@ -202,6 +237,7 @@ python surrogate_predict.py \
 
 ```bash
 python -m tests.test_regressions          # 63 项回归测试
+python -m tests.test_transport            # 39 项对流扩散 / 栅格掩码测试
 python tests/make_fake_data.py --out-dir /tmp/fake && \
   python train.py --train-file /tmp/fake/fake2d.hdf5 --epochs 2 \
                   --exp-name smoke --num-workers 0    # 端到端冒烟

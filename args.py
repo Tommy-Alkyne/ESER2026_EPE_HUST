@@ -95,10 +95,26 @@ def build_parser(default_ndim=2, description=None):
                    help='输出分辨率，2D 给 H W，3D 给 D H W（缺省自动推断）')
 
     # ---------------------------------------------------------------- 物理
+    p.add_argument('--task', type=str, default='flow',
+                   choices=['flow', 'dispersion'],
+                   help="物理任务：flow=流场（连续性方程 + N-S 动量），"
+                        "dispersion=污染物输运（对流扩散方程）。"
+                        "地铁站方案阶段一用 flow，阶段二用 dispersion")
     p.add_argument('--channel-order', type=str, default='pvv',
-                   choices=['pvv', 'vvp'],
-                   help="输出通道语义：pvv=(P,Vx,Vy)，vvp=(Vx,Vy,P)。"
+                   choices=['pvv', 'vvp', 'pvvt', 'c'],
+                   help="输出通道语义：pvv=(P,Vx,Vy)，vvp=(Vx,Vy,P)，"
+                        "pvvt=(P,Vx,Vy,T)（阶段一，T 只学不约束），"
+                        "c=(C,)（阶段二，速度场从输入通道来）。"
                         "务必与数据集实际顺序一致，否则物理约束全部作用在错误通道上")
+    p.add_argument('--diffusivity', type=float, default=1e-5,
+                   help='污染物扩散系数 D（dispersion 任务）')
+    p.add_argument('--advdiff-weight', type=float, default=0.05,
+                   help='对流扩散残差权重（dispersion 任务）')
+    p.add_argument('--source-scale', type=float, default=1.0,
+                   help='源强缩放系数。训练时源强固定为 1，推理时按真实源强线性'
+                        '缩放输出即可（被动标量下方程对 C 是线性的）')
+    p.add_argument('--velocity-channels', type=int, nargs=2, default=[0, 1],
+                   help='dispersion 任务下，输入张量里 (Vx, Vy) 各占第几个通道')
     p.add_argument('--domain-size', nargs='+', type=float, default=[1.0, 1.0],
                    help='计算域物理尺寸 (Ly Lx)，用来把像素间距换算成真实 dx/dy')
     p.add_argument('--rho', type=float, default=1.0, help='流体密度')
@@ -117,9 +133,13 @@ def build_parser(default_ndim=2, description=None):
     p.add_argument('--smooth-weight', type=float, default=0.005, help='平滑项权重')
 
     # ---------------------------------------------------------------- 几何
-    p.add_argument('--t-geometry', type=str, default=None,
-                   help='T 型域几何（JSON 字符串或 JSON 文件路径），'
-                        '缺省用 utils/geometry.py 的归一化默认值')
+    p.add_argument('--t-geometry', '--domain-mask', dest='t_geometry',
+                   type=str, default=None,
+                   help='计算域几何。可以是 JSON 字符串 / JSON 文件路径（矩形段'
+                        '拼接，适合管道），或 .npy 栅格掩码路径（任意形状，适合'
+                        '地铁站平面；0/1 数组，分辨率不必与训练网格一致）。'
+                        '缺省用 utils/geometry.py 的 T 型归一化默认值。'
+                        '别名 --domain-mask')
     p.add_argument('--no-mask', action='store_true', default=False,
                    help='关闭 T 型掩码，在整幅网格上训练与评估')
 

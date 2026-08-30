@@ -114,6 +114,7 @@ def test_split_and_stats():
         check('P0-4 极值样本归一化后落在边界而非被截断',
               abs(float(y_last[0].max()) - 1.0) < 1e-4,
               'max={:.6f}'.format(float(y_last[0].max())))
+        ds.close()      # 不关句柄的话 Windows 上删临时目录会抛 WinError 32
 
 
 # -------------------------------------------------------- P0-5 5D 张量重排
