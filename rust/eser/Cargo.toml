@@ -1,0 +1,15 @@
+[package]
+name = "eser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+burn = { version = "0.18", default-features = false, features = ["std", "ndarray", "autodiff"] }
+
+[dev-dependencies]
+ndarray = "0.16"
+ndarray-npy = { version = "0.9", features = ["npz"] }
+
+[features]
+default = []
+cuda = ["burn/cuda"]
