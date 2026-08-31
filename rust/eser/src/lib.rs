@@ -15,5 +15,6 @@ pub mod physics;
 pub mod plot;
 pub mod predict;
 pub mod store;
+pub mod synth;
 pub mod train;
 pub mod transport;
