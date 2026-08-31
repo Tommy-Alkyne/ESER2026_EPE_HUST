@@ -1,0 +1,47 @@
+0
+
+========================================================================
+                          流场 / 污染物代理模型 · 训练诊断                           
+========================================================================
+
+[INFO] 实验目录: C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_c\bare
+
+========================================================================
+                                  实验配置                                  
+========================================================================
+
+  ndim                    : 2
+  task                    : flow
+  train_file              : a.hdf5
+  test_file               : b.hdf5
+  val_split               : 0.2
+  channel_order           : pvv
+
+========================================================================
+                                配置合理性检查                                 
+========================================================================
+
+[ OK ] 使用独立的测试集文件
+[WARN] 通道顺序设为 pvv -> (P, Vx, Vy)。请确认与数据集 output 的实际语义一致，否则物理约束全部作用在错误通道上。
+[ OK ] 未发现配置层面的硬伤
+
+========================================================================
+                                  训练结果                                  
+========================================================================
+
+[WARN] 没有找到 r2_test.txt / rmse_test.txt，训练可能未正常结束
+
+========================================================================
+                                  产物文件                                  
+========================================================================
+
+
+========================================================================
+                                  下一步                                   
+========================================================================
+
+[INFO] 1. 打开预测对比图：第 1 行真值 / 第 2 行预测 / 第 3 行残差
+[INFO]    残差行用以 0 为中心的对称色阶，接近纯白即拟合良好
+[INFO] 2. 曲线图：C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_c\bare\training/r2.pdf, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_c\bare\training/rmse.pdf, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_c\bare\training/r2_per_channel.pdf
+[INFO] 3. 物理残差曲线：C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_c\bare\training/div_rms.pdf, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_c\bare\training/ns_rms.pdf
+[INFO] 4. 离线推理：python surrogate_predict.py --ckpt-file C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_c\bare\checkpoints/model_best.pth --data-file <你的数据>

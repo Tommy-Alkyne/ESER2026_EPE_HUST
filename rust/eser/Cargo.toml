@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 burn = { version = "0.18", default-features = false, features = ["std", "ndarray", "autodiff"] }
+plotters = "0.3.7"
+rust-hdf5 = "0.5.1"
 
 [dev-dependencies]
 ndarray = "0.16"

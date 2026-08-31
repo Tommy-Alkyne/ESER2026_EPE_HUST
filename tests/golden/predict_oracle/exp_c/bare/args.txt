@@ -1,0 +1,8 @@
+{
+    "ndim": 2,
+    "task": "flow",
+    "channel_order": "pvv",
+    "train_file": "a.hdf5",
+    "test_file": "b.hdf5",
+    "val_split": 0.2
+}

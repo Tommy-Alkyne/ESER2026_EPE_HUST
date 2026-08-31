@@ -1,0 +1,38 @@
+{
+    "ndim": 2,
+    "task": "dispersion",
+    "train_file": "dataset/fake_stage2.hdf5",
+    "test_file": "dataset/fake_stage2_test.hdf5",
+    "val_split": 0.2,
+    "channel_order": "c",
+    "epochs": 200,
+    "batch_size": 16,
+    "lr": 0.0005,
+    "weight_decay": 1e-05,
+    "blocks": [
+        3,
+        6,
+        3
+    ],
+    "growth_rate": 24,
+    "init_features": 48,
+    "div_weight": 0.0,
+    "ns_weight": 0.0,
+    "advdiff_weight": 0.05,
+    "smooth_weight": 0.01,
+    "diffusivity": 1e-05,
+    "velocity_channels": [
+        0,
+        1
+    ],
+    "t_geometry": "dataset\\station_mask.npy",
+    "domain_size": [
+        12.0,
+        40.0
+    ],
+    "rho": 1.2,
+    "nu": 1.5e-05,
+    "n_params": 2345678,
+    "training_time": 1234.5678,
+    "no_mask": true
+}

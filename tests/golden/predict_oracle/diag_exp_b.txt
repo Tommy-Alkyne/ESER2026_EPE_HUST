@@ -1,0 +1,97 @@
+0
+
+========================================================================
+                          流场 / 污染物代理模型 · 训练诊断                           
+========================================================================
+
+[INFO] 实验目录: C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only
+
+========================================================================
+                                  实验配置                                  
+========================================================================
+
+  ndim                    : 2
+  task                    : flow
+  train_file              : dataset/fake2d.hdf5
+  test_file               : dataset/fake2d.hdf5
+  val_split               : 0
+  epochs                  : 50
+  batch_size              : 8
+  lr                      : 0.001
+  weight_decay            : 1e-05
+  blocks                  : [3, 6, 3]
+  growth_rate             : 16
+  init_features           : 48
+  div_weight              : 0.1
+  ns_weight               : 0
+  advdiff_weight          : 0.0
+  smooth_weight           : 0.01
+  diffusivity             : 1e-05
+  t_geometry              : None
+  domain_size             : [1.0, 1.0]
+  rho                     : 1.0
+  nu                      : 1e-06
+  n_params                : 1234567
+  training_time           : 61.5
+
+========================================================================
+                                配置合理性检查                                 
+========================================================================
+
+[ OK ] 流场任务且 --ns-weight=0：只保留连续性方程，已跳过层流动量残差
+[WARN] 物理损失运行在归一化空间（--physics-in-physical-units false），散度/动量残差不代表真实物理量
+[WARN] domain_size 仍是默认的 1x1，若真实计算域不是单位尺寸，dx/dy 与雷诺数就对不上，物理残差的绝对数值没有意义
+[FAIL] 训练集与测试集是同一个文件且 val_split=0 —— 报告的 R² 是训练集内指标，不代表泛化能力。请设 --val-split 0.2 或提供独立测试集。
+[FAIL] args.txt 里没有 channel_order，可能是旧版实验产物
+
+========================================================================
+                                  训练结果                                  
+========================================================================
+
+  最终 R²                     :     0.740200          [✗ 欠佳]
+  最终 RMSE                   :     0.120400          [✗ 欠佳]
+
+========================================================================
+                                  产物文件                                  
+========================================================================
+
+[INFO] checkpoint 数量: 2
+[INFO] 最新权重: C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\checkpoints\model_epoch20.pth
+
+========================================================================
+                                 模型质量诊断                                 
+========================================================================
+
+核心指标:
+  R² Score                  :     0.740200          [✗ 欠佳]
+  RMSE (归一化尺度)              :     0.120400          [✗ 欠佳]
+
+分通道 R²:
+    ch0                     :     0.700000          [✗ 欠佳]
+    ch1                     :     0.740000          [✗ 欠佳]
+    ch2                     :     0.740200          [✗ 欠佳]
+    ch3                     :     0.740300          [✗ 欠佳]
+    ch4                     :     0.740200          [✗ 欠佳]
+
+物理残差（有量纲）:
+    连续性 |div v| RMS         :     2.100000 
+    动量方程残差 RMS              :     9.500000 
+
+建议:
+[INFO] • 提高模型容量：--growth-rate 24~32 / --init-features 64
+[INFO] • 训练轮数加到 400+
+[INFO] • 确认输入信息是否足以决定输出（传感器点位是否太稀疏）
+[INFO] • 检查归一化统计量是否过期（删掉 dataset/*.stats.npz 重算）
+[INFO] • 检查 --t-geometry 是否与实际管道几何匹配
+[INFO] • 验证 R² 已经平台化，继续训练收益有限
+
+========================================================================
+                                  下一步                                   
+========================================================================
+
+[FAIL] 先解决上面的配置问题，否则任何指标都不可信
+[INFO] 1. 打开预测对比图：第 1 行真值 / 第 2 行预测 / 第 3 行残差
+[INFO]    残差行用以 0 为中心的对称色阶，接近纯白即拟合良好
+[INFO] 2. 曲线图：C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/r2.pdf, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/rmse.pdf, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/r2_per_channel.pdf
+[INFO] 3. 物理残差曲线：C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/div_rms.pdf, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/ns_rms.pdf
+[INFO] 4. 离线推理：python surrogate_predict.py --ckpt-file C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\checkpoints/model_best.pth --data-file <你的数据>

@@ -124,6 +124,68 @@
       "validates": "单通道分支（groups 卷积不生效的那条路）"
     },
     {
+      "name": "op/interp_up2",
+      "shape": [
+        2,
+        3,
+        34,
+        38
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "2 倍双线性上采样，align_corners=False"
+    },
+    {
+      "name": "op/interp_to_9x11",
+      "shape": [
+        2,
+        3,
+        9,
+        11
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "双线性下采样到任意尺寸（skip 对齐会用到）"
+    },
+    {
+      "name": "op/interp_to_40x38",
+      "shape": [
+        2,
+        3,
+        40,
+        38
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "非整数倍放大，两个方向缩放比不同"
+    },
+    {
+      "name": "op/interp3d_src",
+      "shape": [
+        1,
+        2,
+        3,
+        7,
+        9
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "三线性插值输入 (B,C,D,H,W)"
+    },
+    {
+      "name": "op/interp3d_up",
+      "shape": [
+        1,
+        2,
+        3,
+        14,
+        18
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "三线性上采样，深度轴不动"
+    },
+    {
       "name": "mask/all_ones/src",
       "shape": [
         1,
@@ -722,6 +784,18 @@
       "dtype": "float32",
       "tol": 1e-05,
       "validates": "中心时间差分，分母是 2Δt"
+    },
+    {
+      "name": "trans/target",
+      "shape": [
+        2,
+        1,
+        32,
+        32
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "dispersion 组合损失的目标场"
     },
     {
       "name": "trans/combined_total",
@@ -3267,6 +3341,175 @@
       "dtype": "float32",
       "tol": 1e-05,
       "validates": "3D 前向输出"
+    },
+    {
+      "name": "attn/param/norm1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/norm1.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/attn.in_proj_weight",
+      "shape": [
+        48,
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/attn.in_proj_bias",
+      "shape": [
+        48
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/attn.out_proj.weight",
+      "shape": [
+        16,
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/attn.out_proj.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/norm2.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/norm2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/mlp.0.weight",
+      "shape": [
+        64,
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/mlp.0.bias",
+      "shape": [
+        64
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/mlp.3.weight",
+      "shape": [
+        16,
+        64
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/param/mlp.3.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "Transformer 瓶颈的固定权重"
+    },
+    {
+      "name": "attn/input",
+      "shape": [
+        2,
+        16,
+        6,
+        6
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "瓶颈前向输入 (B,C,H,W)"
+    },
+    {
+      "name": "attn/output",
+      "shape": [
+        2,
+        16,
+        6,
+        6
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "瓶颈前向输出。Q/K 顺序、softmax 归一化轴、1/sqrt(d) 缩放、out_proj 是否真的被应用，都在这一项上暴露"
+    },
+    {
+      "name": "attn/weight_spread",
+      "shape": [],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "注意力权重的极差。远大于 0 才说明 softmax 有选择性，这组参考数据才验得动注意力核"
+    },
+    {
+      "name": "attn/input3d",
+      "shape": [
+        1,
+        16,
+        2,
+        5,
+        5
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "瓶颈 3D 前向输入 (B,C,D,H,W)"
+    },
+    {
+      "name": "attn/output3d",
+      "shape": [
+        1,
+        16,
+        2,
+        5,
+        5
+      ],
+      "dtype": "float32",
+      "tol": 1e-05,
+      "validates": "3D 位置编码的通道划分与 2D 不同，单独验"
     },
     {
       "name": "step/before/param/in_conv.weight",

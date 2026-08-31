@@ -5,9 +5,13 @@
 用 CNN 编解码网络代理 T 型管内不可压缩流场（压力 + 速度）的 CFD 求解，
 并以 PINN 残差（连续性方程 + 稳态 N-S 动量方程）作为物理正则项。
 
+> **实现语言**：整个项目是 **Rust + [Burn](https://burn.dev) 0.18**。
+> 早先的 PyTorch 实现已在验收通过后退役，仓库里不再有 Python 代码。
+> 迁移过程与踩过的坑见 `Rust重构方案_调研与实施计划.md`。
+>
 > **溯源**：本项目 fork 自 [`cics-nd/cnn-surrogate`](https://github.com/cics-nd/cnn-surrogate)
 > （Zhu & Zabaras 的贝叶斯卷积编解码代理模型，原用于 KLE 随机渗流场）。
-> 代码中的 `--kle` 参数、`images/kle*.png` 等是上游遗留。
+> `images/kle*.png` 等是上游遗留。
 
 ---
 
@@ -26,16 +30,13 @@
 | `vvp` | 通道顺序是 (Vx, Vy, P) |
 
 配错了不会报任何错，只会让散度约束去算 `∂P/∂x + ∂Vx/∂y` 这种无意义的量，
-把模型往错误方向拉。**请先打开数据集确认**：
+把模型往错误方向拉。**请先确认数据集的通道语义**——训练一开跑就会打印逐通道极值：
 
-```python
-import h5py
-with h5py.File('dataset/你的数据.hdf5') as f:
-    print(f['output'].shape)                 # (N, C, H, W)
-    for c in range(f['output'].shape[1]):
-        print(c, f['output'][:, c].min(), f['output'][:, c].max())
-# 压力通道的量级通常比速度大 1~2 个数量级
+```text
+[eser-train] 训练 19 样本，验证 5 样本，输出形状 [24, 3, 137, 137]
 ```
+
+压力通道的量级通常比速度大 1~2 个数量级，据此核对哪个通道是 P。
 
 ### 2. 计算域物理尺寸（`--domain-size Ly Lx`）
 
@@ -50,7 +51,7 @@ with h5py.File('dataset/你的数据.hdf5') as f:
 覆盖同一物理区域（约 44.9%）。若你的管道形状不同，用 JSON 覆盖：
 
 ```bash
-python train.py --t-geometry '{"vertical":[0.0,0.99,0.0,0.26],"horizontal":[0.37,0.64,0.26,1.0]}'
+eser-train --domain-mask '{"vertical":[0.0,0.99,0.0,0.26],"horizontal":[0.37,0.64,0.26,1.0]}'
 ```
 
 每段是 `[y0, y1, x0, x1]` 的比例（右开区间）。想在整幅网格上训练就加 `--no-mask`。
@@ -82,42 +83,63 @@ python train.py --t-geometry '{"vertical":[0.0,0.99,0.0,0.26],"horizontal":[0.37
 
 ```text
 .
-├── dataset/                    # HDF5 数据集（自动生成的 *.stats.npz 缓存也在这里）
-├── experiments/                # 实验输出：args.txt / checkpoints / training/
-├── models/
-│   ├── attention.py            # Transformer 瓶颈 + 空间注意力（2D/3D 共用，含位置编码）
-│   ├── dense_ed.py             # 2D DenseED + skip + Transformer
-│   └── dense_ed_3d.py          # 3D 体素版本
-├── utils/
-│   ├── geometry.py             # 计算域几何（矩形段比例 或 .npy 栅格，唯一真源）
-│   ├── data_common.py          # 全量统计、归一化/反归一化、数据划分
-│   ├── load_data.py            # 2D 加载器（惰性 HDF5，句柄按 worker 缓存）
-│   ├── load_data_3d.py         # 3D 加载器（签名与 2D 完全一致）
-│   ├── physics_loss.py         # 散度 / N-S 动量 / 平滑 / 重建 + 量级归一化
-│   ├── transport.py            # 对流扩散残差（污染物输运，--task dispersion）
-│   ├── misc.py                 # 目录工具 + 分通道 R²/RMSE 累计器
-│   └── plot.py / plot_3d.py    # 预测对比图与训练曲线（3D 版直接复用 2D 实现）
-├── tests/
-│   ├── make_fake_data.py       # 生成合成数据集，用于冒烟测试
-│   ├── test_regressions.py     # 63 项回归测试，覆盖审查报告每一条问题
-│   └── test_transport.py       # 39 项对流扩散 / 栅格掩码测试（含解析解验证）
-├── train.py                    # 主训练脚本
-├── surrogate_predict.py        # 离线推理（输出反归一化回物理量纲）
-├── diagnose.py                 # 诊断报告（含配置合理性检查）
-├── gui_trainer.py              # Tkinter 训练控制台
-└── args.py / args_3d.py        # 统一参数定义（args_3d 只改 --ndim 默认值）
+├── dataset/                         # HDF5 数据集
+├── experiments/                     # 实验输出：args.txt / checkpoints / *.txt / *.svg
+├── rust/
+│   ├── eser/                        # 核心库
+│   │   ├── src/
+│   │   │   ├── ops.rs               # 差分算子、掩码统计、腐蚀（手写 replicate padding）
+│   │   │   ├── interp.rs            # align_corners=False 的双线性/三线性插值（Burn 自带的语义不同）
+│   │   │   ├── geometry.rs          # 计算域几何（矩形段比例 或 .npy 栅格，唯一真源）
+│   │   │   ├── physics.rs           # 散度 / N-S 动量 / 平滑 / 重建 + 量级归一化
+│   │   │   ├── transport.rs         # 对流扩散残差（污染物输运，--task dispersion）
+│   │   │   ├── attention.rs         # Transformer 瓶颈 + 空间注意力（含 sin-cos 位置编码）
+│   │   │   ├── model.rs             # 2D DenseED + skip + Transformer
+│   │   │   ├── model3d.rs           # 3D 体素版本
+│   │   │   ├── data.rs              # HDF5 惰性加载、全量统计、归一化、划分、R²/RMSE
+│   │   │   ├── store.rs             # 按名字装载权重（含「未消费的键必须报错」）
+│   │   │   ├── train.rs             # 训练循环、全局梯度裁剪、ReduceLROnPlateau、checkpoint
+│   │   │   ├── predict.rs           # 离线推理
+│   │   │   ├── diagnose.rs          # 诊断报告
+│   │   │   ├── plot.rs              # 预测对比图与训练曲线（plotters）
+│   │   │   ├── synth.rs             # 流函数 + 对流扩散数值求解器（造满足方程的合成数据）
+│   │   │   ├── cli.rs               # 命令行解析
+│   │   │   └── bin/
+│   │   │       ├── eser-train.rs    # 训练入口
+│   │   │       ├── eser-diagnose.rs # 诊断入口
+│   │   │       ├── eser-makedata.rs # 生成合成数据集，用于冒烟测试
+│   │   │       ├── eser-makestation.rs # 地铁站两阶段数据生成器（数值求解，非 CFD）
+│   │   │       └── eser-predict.rs  # 离线推理入口
+│   │   └── tests/                   # 黄金数据验收：算子 / 物理 / 模型 / 训练步 / 推理
+│   └── gui/                         # egui 训练控制台
+├── tests/golden/                    # **冻结的**参考数据（见下）
+│   ├── golden.npz                   # 502 项参考张量
+│   ├── manifest.json                # 每项的形状 / 容差 / 它在验证什么
+│   └── predict_oracle/              # 推理与诊断的参照输出
+└── scripts/                         # 上游遗留的下载脚本
 ```
+
+### 关于 `tests/golden/`
+
+这批数据当初由 PyTorch 版跑出来，用来逐元素验收 Rust 实现。**PyTorch 版已退役，
+所以它是冻结的**：既不能再生成，也没有回验脚本了。
+
+它作为回归防线依然有效——改了 Rust 实现照样会红。但要清楚边界：参考值本身再没有
+第二个实现能交叉验证；想扩充覆盖得自己在 Rust 侧构造并论证正确性。
 
 ---
 
 ## 四、工作流程
 
-### 1. 环境
+### 1. 构建
 
 ```bash
-pip install torch numpy h5py matplotlib
-# GUI 需要 tkinter；Linux 上通常是 python3-tk
+cd rust
+cargo build --release          # 产出 eser-train / eser-diagnose / eser-makedata / gui
 ```
+
+只有一个外部要求：**系统里要有中文字体**（GUI 用），Windows 自带的黑体即可；
+没有的话界面会显示成方块，程序启动时会明确提示。
 
 ### 2. 数据
 
@@ -127,26 +149,27 @@ pip install torch numpy h5py matplotlib
 - `input` 或 `sensor_input`：网络输入
 - （3D 可选）`spatial_input`：带空间结构的输入，会与标量向量自动拼接
 
-首次加载时会全量扫描一遍算逐通道极值，并缓存成 `dataset/<file>.output.stats.npz`。
-**数据改了记得删缓存**（缓存会按 mtime 自动失效，手动删更保险）。
+每次加载都会全量扫描一遍算逐通道极值。**注意没有做统计量缓存**：Python 版有
+`*.stats.npz` 缓存，Rust 版没有移植——两个实现共用一份缓存反而危险，而重算的代价
+只是一次顺序读盘。
 
 ### 3. 训练
 
 ```bash
 # 单文件，自动切 20% 做验证
-python train.py --train-file dataset/p_v_256.hdf5 \
-                --channel-order pvv \
-                --domain-size 1.0 1.0 --rho 1.0 --nu 0.01 \
-                --epochs 200 --batch-size 8
+eser-train --train-file dataset/p_v_256.hdf5 \
+           --channel-order pvv \
+           --domain-size 1.0 1.0 --rho 1.0 --nu 0.01 \
+           --epochs 200 --batch-size 16
 
 # 有独立测试集
-python train.py --train-file dataset/train.hdf5 --test-file dataset/test.hdf5
+eser-train --train-file dataset/train.hdf5 --test-file dataset/test.hdf5
 
 # 3D
-python train.py --ndim 3 --train-file dataset/10243d.hdf5
+eser-train --ndim 3 --train-file dataset/10243d.hdf5
 
-# 图形界面
-python gui_trainer.py
+# 图形界面（左侧参数表单 + 右侧实时日志，它去起 eser-train）
+cargo run --release -p gui
 ```
 
 #### 污染物输运（两阶段）
@@ -158,10 +181,17 @@ python gui_trainer.py
 ```bash
 # 阶段一：工况 -> (P, Vx, Vy, T)。高 Re 湍流下层流动量残差不成立，用 --ns-weight 0
 #         关掉，只保留连续性方程（它对不可压缩 RANS 时均场严格成立）
-python train.py --task flow --channel-order pvvt --ns-weight 0                 --train-file dataset/stage1.hdf5                 --domain-mask dataset/station_mask.npy                 --domain-size 12.0 60.0 --blocks "[3,4,6,4,3]"
+eser-train --task flow --channel-order pvvt --ns-weight 0 \
+           --train-file dataset/stage1.hdf5 \
+           --domain-mask dataset/station_mask.npy \
+           --domain-size 12.0 60.0 --blocks "[3,4,6,4,3]"
 
 # 阶段二：(Vx, Vy, 源位置图, t) -> C
-python train.py --task dispersion --channel-order c                 --train-file dataset/stage2.hdf5                 --diffusivity 2e-5 --velocity-channels 0 1                 --domain-mask dataset/station_mask.npy                 --domain-size 12.0 60.0 --blocks "[3,4,6,4,3]"
+eser-train --task dispersion --channel-order c \
+           --train-file dataset/stage2.hdf5 \
+           --diffusivity 2e-5 --velocity-channels 0 1 \
+           --domain-mask dataset/station_mask.npy \
+           --domain-size 12.0 60.0 --blocks "[3,4,6,4,3]"
 ```
 
 几个要点：
@@ -200,7 +230,7 @@ python train.py --task dispersion --channel-order c                 --train-file
 ### 4. 诊断
 
 ```bash
-python diagnose.py
+eser-diagnose                 # 默认读 ./experiments 下最新的实验
 ```
 
 会读取最新实验，先做**配置合理性检查**（训练测试是否同源、通道顺序、
@@ -210,11 +240,24 @@ domain_size 是否还是默认值……），再报 R²、分通道 R²、RMSE �
 ### 5. 推理
 
 ```bash
-python surrogate_predict.py \
-    --ckpt-file experiments/run01/checkpoints/model_best.pth \
-    --data-file dataset/new_case.hdf5 \
-    --out-file experiments/run01/pred.hdf5
+eser-predict --ckpt-file experiments/run01/checkpoints/best \
+             --data-file dataset/new_case.hdf5 \
+             --out-file  experiments/run01/pred.hdf5
 ```
+
+`--ckpt-file` 给的是**前缀**（不带扩展名），实际读 `<前缀>.mpk` 与 `<前缀>.meta`。
+归一化统计量、计算域几何、网络结构全部取自 checkpoint——拿待推理数据自己的极值去
+反归一化，输出会被映射到另一套标度，图看着正常、数全错。
+
+只评估已训练好的模型（不再训练）：
+
+```bash
+eser-train --train-file dataset/p_v_256.hdf5 --post \
+           --exp-dir ./experiments --exp-name run01
+```
+
+缺省评估 `best`；`--ckpt-epoch N` 指定某一轮。找不到 checkpoint 时直接报错，
+不会拿随机权重评出一个像样的 R²。
 
 输出文件包含：
 
@@ -229,19 +272,29 @@ python surrogate_predict.py \
 - 图像路径：`experiments/<实验名>/training/predictions/`
 - 第 1 行 CFD 真值，第 2 行代理模型预测（**与第 1 行同色阶**），
   第 3 行残差（以 0 为中心的对称 diverging 色阶，接近纯白即拟合良好）
-- 曲线：`r2.pdf`、`rmse.pdf`、`r2_per_channel.pdf`、`div_rms.pdf`、`ns_rms.pdf`
+- 曲线：`r2.svg`、`rmse.svg`、`loss.svg`（**SVG 不是 PDF**——`plotters` 没有 PDF
+  后端；SVG 是矢量的，出版质量够，真需要 `.pdf` 时外挂一步转换）
+- 数值：`r2_test.txt`、`rmse_test.txt`、`div_rms.txt` 等，`eser-diagnose` 读的就是这些
 
 ---
 
 ## 五、测试
 
 ```bash
-python -m tests.test_regressions          # 63 项回归测试
-python -m tests.test_transport            # 39 项对流扩散 / 栅格掩码测试
-python tests/make_fake_data.py --out-dir /tmp/fake && \
-  python train.py --train-file /tmp/fake/fake2d.hdf5 --epochs 2 \
-                  --exp-name smoke --num-workers 0    # 端到端冒烟
+cd rust
+cargo test --workspace                    # 265 项：算子 / 物理 / 模型 / 训练步 / 推理 / GUI
+cargo clippy --workspace --all-targets    # 零警告
+
+# 端到端冒烟
+cargo run --release -p eser --bin eser-makedata          # 生成合成数据集到 dataset/
+cargo run --release -p eser --bin eser-train -- \
+    --train-file dataset/fake2d.hdf5 --epochs 2 --exp-name smoke
+cargo run --release -p eser --bin eser-diagnose
 ```
+
+测试分两类：**黄金数据验收**（逐元素对上 `tests/golden/`）与**性质测试**
+（解析解收敛阶、变异检测、不变量）。后者不依赖参考数据，是参考数据万一失效时的
+第二道防线。
 
 ---
 
@@ -255,3 +308,9 @@ python tests/make_fake_data.py --out-dir /tmp/fake && \
   x-y 平面上计算，尚未包含 `∂/∂z` 项。真正的三维 N-S 约束还需要扩展。
 - **旧 checkpoint 不兼容**：2D 模型加了 skip connection、上采样从
   `ConvTranspose` 换成 `Upsample+Conv`，权重结构已变。旧权重需要重训。
+  PyTorch 时代的 `.pth` 同样读不了——checkpoint 现在是 Burn 的记录格式
+  （`<name>` 权重 + `<name>.meta` 纯文本元信息）。
+- **BatchNorm 的 running_var 与 PyTorch 有系统性微差**：Burn 用有偏方差更新，
+  PyTorch 用无偏（乘 n/(n-1)）。训练路径完全不受影响，只有推理用的 running_var
+  偏 1/(n-1)，本项目 n 通常上千，约 0.05%。
+- **统计量缓存未移植**：见「工作流程 · 数据」一节。
