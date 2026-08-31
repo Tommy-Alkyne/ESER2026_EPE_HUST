@@ -35,7 +35,11 @@ pub const NORM_EPS: f32 = 1e-8;
 ///
 /// Python 侧是 `np.asarray(dset[...], dtype=np.float32)`，什么数值类型都吃；这里
 /// 只接 f32 / f64（CFD 求解器的实际输出），别的显式报错而不是转成垃圾。
-fn read_block_f32(ds: &H5Dataset, starts: &[usize], counts: &[usize]) -> Result<Vec<f32>, String> {
+///
+/// 公开出去是给外部数据集的转换器用（如 `eser-mappdebench`）。**别在外面另写一份**：
+/// 里头那道字节序检查不是装饰——rust-hdf5 直接把磁盘字节按主机序重解释，大端文件
+/// 读出来是垃圾数值而不是错误。
+pub fn read_block_f32(ds: &H5Dataset, starts: &[usize], counts: &[usize]) -> Result<Vec<f32>, String> {
     let dt = ds
         .datatype()
         .map_err(|e| format!("读 datatype 失败: {}", e))?;

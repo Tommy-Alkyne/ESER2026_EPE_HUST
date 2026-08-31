@@ -109,6 +109,7 @@ eser-train --domain-mask '{"vertical":[0.0,0.99,0.0,0.26],"horizontal":[0.37,0.6
 │   │   │       ├── eser-diagnose.rs # 诊断入口
 │   │   │       ├── eser-makedata.rs # 生成合成数据集，用于冒烟测试
 │   │   │       ├── eser-makestation.rs # 地铁站两阶段数据生成器（数值求解，非 CFD）
+│   │   │       ├── eser-mappdebench.rs # 把 PDEBench 的二维不可压 NS 数据映射成阶段二格式
 │   │   │       └── eser-predict.rs  # 离线推理入口
 │   │   └── tests/                   # 黄金数据验收：算子 / 物理 / 模型 / 训练步 / 推理
 │   └── gui/                         # egui 训练控制台
