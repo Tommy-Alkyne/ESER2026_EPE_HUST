@@ -618,19 +618,19 @@ pub fn run(exp_root: &Path) -> Report {
     report.info("1. 打开预测对比图：第 1 行真值 / 第 2 行预测 / 第 3 行残差");
     report.info("   残差行用以 0 为中心的对称色阶，接近纯白即拟合良好");
     report.info(format!(
-        "2. 曲线图：{}/r2.pdf, {}/rmse.pdf, {}/r2_per_channel.pdf",
+        "2. 曲线图：{}/r2.svg, {}/rmse.svg, {}/r2_per_channel.svg",
         train_dir.display(),
         train_dir.display(),
         train_dir.display()
     ));
     if cfg.get("task").and_then(Json::as_str) == Some("dispersion") {
         report.info(format!(
-            "3. 物理残差曲线：{}/advdiff_rms.pdf",
+            "3. 物理残差曲线：{}/advdiff_rms.svg",
             train_dir.display()
         ));
     } else {
         report.info(format!(
-            "3. 物理残差曲线：{}/div_rms.pdf, {}/ns_rms.pdf",
+            "3. 物理残差曲线：{}/div_rms.svg, {}/ns_rms.svg",
             train_dir.display(),
             train_dir.display()
         ));

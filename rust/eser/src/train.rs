@@ -1469,6 +1469,52 @@ pub fn plot_history(dir: &Path, logs: &[EpochLog]) -> Result<(), String> {
         .map_err(|e| format!("画 RMSE 曲线失败：{}", e))?;
     crate::plot::plot_curves(&dir.join("loss.svg"), "loss", &[("train", &total)])
         .map_err(|e| format!("画 loss 曲线失败：{}", e))?;
+
+    // ---- 分通道 R² ----
+    // 方案 §7.3：「分通道 R² 和残差图必须看，不能只看总指标」。总 R² 0.99 时，
+    // 局部（分流点的涡、壁面梯度、楼梯口）照样可能错得离谱，而那只在分通道曲线上露头。
+    // 诊断报告一直点名这张图，此前却从没生成过——报告指向了不存在的文件。
+    let n_ch = logs
+        .iter()
+        .map(|l| l.val_r2_per_channel.len())
+        .max()
+        .unwrap_or(0);
+    if n_ch > 0 {
+        let per_ch: Vec<Vec<f32>> = (0..n_ch)
+            .map(|c| {
+                logs.iter()
+                    .map(|l| l.val_r2_per_channel.get(c).copied().unwrap_or(f64::NAN) as f32)
+                    .collect()
+            })
+            .collect();
+        let names: Vec<String> = (0..n_ch).map(|c| format!("ch{}", c)).collect();
+        let series: Vec<(&str, &[f32])> = names
+            .iter()
+            .zip(&per_ch)
+            .map(|(n, v)| (n.as_str(), v.as_slice()))
+            .collect();
+        crate::plot::plot_curves(&dir.join("r2_per_channel.svg"), "R2 per channel", &series)
+            .map_err(|e| format!("画分通道 R² 曲线失败：{}", e))?;
+    }
+
+    // ---- 物理残差 ----
+    // 只画本次任务真的算了的项。flow 任务下 advdiff 恒为 None，画一条空曲线
+    // 比不画更误导——看图的人会以为对流扩散约束开着。
+    for (name, pick) in [("div_rms", 0usize), ("ns_rms", 1), ("advdiff_rms", 2)] {
+        let vals: Vec<f32> = logs
+            .iter()
+            .filter_map(|l| match pick {
+                0 => l.physics.div_rms,
+                1 => l.physics.ns_rms,
+                _ => l.physics.advdiff_rms,
+            })
+            .map(|v| v as f32)
+            .collect();
+        if !vals.is_empty() {
+            crate::plot::plot_curves(&dir.join(format!("{}.svg", name)), name, &[("val", &vals)])
+                .map_err(|e| format!("画 {} 曲线失败：{}", name, e))?;
+        }
+    }
     Ok(())
 }
 

@@ -92,6 +92,6 @@
 [FAIL] 先解决上面的配置问题，否则任何指标都不可信
 [INFO] 1. 打开预测对比图：第 1 行真值 / 第 2 行预测 / 第 3 行残差
 [INFO]    残差行用以 0 为中心的对称色阶，接近纯白即拟合良好
-[INFO] 2. 曲线图：C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/r2.pdf, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/rmse.pdf, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/r2_per_channel.pdf
-[INFO] 3. 物理残差曲线：C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/div_rms.pdf, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/ns_rms.pdf
+[INFO] 2. 曲线图：C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/r2.svg, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/rmse.svg, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/r2_per_channel.svg
+[INFO] 3. 物理残差曲线：C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/div_rms.svg, C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\training/ns_rms.svg
 [INFO] 4. 离线推理：python surrogate_predict.py --ckpt-file C:\Users\Wanzi\AppData\Local\Temp\eser_p6_c24544ea15f13c49\exp_b\only\checkpoints/model_best.pth --data-file <你的数据>
