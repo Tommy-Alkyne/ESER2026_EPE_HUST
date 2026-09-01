@@ -3,6 +3,7 @@
 //! 移植自同仓库的 Python 版。验收标准不是「跑起来了」，而是逐元素对上
 //! `tests/golden/golden.npz` 里由 Python 版冻结的 502 项参考数据。
 pub mod attention;
+pub mod boundary;
 pub mod cli;
 pub mod data;
 pub mod diagnose;

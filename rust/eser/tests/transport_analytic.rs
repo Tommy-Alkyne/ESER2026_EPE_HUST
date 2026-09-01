@@ -292,11 +292,12 @@ fn pollution_outside_mask_does_not_leak_in() {
     let make = |c: Tensor<B, 4>| Fields {
         c: Some(c),
         vx: Some(vx.clone()),
+        vz: None,
         vy: Some(vy.clone()),
         p: None,
     };
     let loss = |f: &Fields<B>| {
-        scalar(advection_diffusion_loss(f, Some(mask.clone()), 0.01, h, h, None, None).unwrap())
+        scalar(advection_diffusion_loss(f, Some(mask.clone()), 0.01, h, h, None, None, None).unwrap())
     };
 
     let clean = loss(&make(c.clone()));
@@ -364,10 +365,11 @@ fn gradient_flows_back_to_concentration() {
         c: Some(c.clone()),
         vx: Some(full4::<AB>(0.1, n)),
         vy: Some(full4::<AB>(0.05, n)),
+        vz: None,
         p: None,
     };
     let mask = interior_mask::<AB>(n, 2);
-    let loss = advection_diffusion_loss(&fields, Some(mask), 0.01, h, h, None, None).unwrap();
+    let loss = advection_diffusion_loss(&fields, Some(mask), 0.01, h, h, None, None, None).unwrap();
 
     let grads = loss.backward();
     let g = c.grad(&grads).expect("浓度场没有拿到梯度");

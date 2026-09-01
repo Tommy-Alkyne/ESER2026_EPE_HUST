@@ -88,10 +88,11 @@ eser-train --domain-mask '{"vertical":[0.0,0.99,0.0,0.26],"horizontal":[0.37,0.6
 ├── rust/
 │   ├── eser/                        # 核心库
 │   │   ├── src/
-│   │   │   ├── ops.rs               # 差分算子、掩码统计、腐蚀（手写 replicate padding）
+│   │   │   ├── ops.rs               # 差分算子（含 z 方向）、掩码统计、腐蚀（手写 replicate padding）
 │   │   │   ├── interp.rs            # align_corners=False 的双线性/三线性插值（Burn 自带的语义不同）
 │   │   │   ├── geometry.rs          # 计算域几何（矩形段比例 或 .npy 栅格，唯一真源）
-│   │   │   ├── physics.rs           # 散度 / N-S 动量 / 平滑 / 重建 + 量级归一化
+│   │   │   ├── physics.rs           # 散度 / N-S 动量 / 平滑 / 重建 + 量级归一化（二维与三维同一条路径）
+│   │   │   ├── boundary.rs          # 边界条件残差：固壁不可穿透 / 无通量、风口法向速度
 │   │   │   ├── transport.rs         # 对流扩散残差（污染物输运，--task dispersion）
 │   │   │   ├── attention.rs         # Transformer 瓶颈 + 空间注意力（含 sin-cos 位置编码）
 │   │   │   ├── model.rs             # 2D DenseED + skip + Transformer

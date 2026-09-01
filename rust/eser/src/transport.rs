@@ -63,9 +63,16 @@ pub fn advection_diffusion_loss<B: Backend>(
     dy: f64,
     dcdt: Option<Tensor<B, 4>>,
     source: Option<Tensor<B, 4>>,
+    z: Option<crate::physics::ZAxis>,
 ) -> Option<Tensor<B, 1>> {
     let (c, vx, vy) = (fields.c.clone()?, fields.vx.clone()?, fields.vy.clone()?);
-    let r = advection_diffusion_residual(c, vx, vy, diffusivity, dx, dy, dcdt, source);
+    let mut r = advection_diffusion_residual(c.clone(), vx, vy, diffusivity, dx, dy, dcdt, source);
+    // 三维补上竖向对流 w·∂C/∂z 与竖向扩散 D·∂²C/∂z²。
+    // 地铁站的烟气就是靠楼梯竖向串层的，漏了这两项等于假设各层互不相通
+    if let (Some(z), Some(vz)) = (z, fields.vz.clone()) {
+        r = r + vz * crate::physics::dz_of(c.clone(), z, false)
+            - crate::physics::dz_of(c, z, true).mul_scalar(diffusivity);
+    }
     Some(masked_mean(r.clone() * r, mask))
 }
 

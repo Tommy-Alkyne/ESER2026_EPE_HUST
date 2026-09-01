@@ -679,6 +679,8 @@ pub struct FitConfig {
     pub test_batch_size: Option<usize>,
     /// dispersion 任务下速度场在**输入通道**里的下标，对应 `--velocity-channels`
     pub velocity_channels: (usize, usize),
+    /// dispersion 三维时竖向速度所在的输入通道。`None` = 不算任何 z 项
+    pub velocity_channel_z: Option<usize>,
     /// 每轮往 stdout 打一行进度。
     ///
     /// **GUI 靠 stdout 实时滚日志**：不打的话跑起来日志区一片空白，用户没法判断是
@@ -715,6 +717,7 @@ impl Default for FitConfig {
             physics_scaling: true,
             test_batch_size: Some(100),
             velocity_channels: (0, 1),
+            velocity_channel_z: None,
             verbose: true,
             keep_best: true,
             hyper: Vec::new(),
@@ -759,6 +762,7 @@ fn average_parts(acc: &[LossParts]) -> LossParts {
     out.ns = acc.iter().map(|p| p.ns).sum::<f64>() / n;
     out.advdiff = acc.iter().map(|p| p.advdiff).sum::<f64>() / n;
     out.smooth = acc.iter().map(|p| p.smooth).sum::<f64>() / n;
+    out.bc = acc.iter().map(|p| p.bc).sum::<f64>() / n;
     out.total = acc.iter().map(|p| p.total).sum::<f64>() / n;
     out
 }
@@ -769,15 +773,18 @@ const ZERO_PARTS: LossParts = LossParts {
     ns: 0.0,
     advdiff: 0.0,
     smooth: 0.0,
+    bc: 0.0,
     total: 0.0,
     w_div: 0.0,
     w_ns: 0.0,
     w_advdiff: 0.0,
     w_smooth: 0.0,
+    w_bc: 0.0,
     scale_div: 1.0,
     scale_ns: 1.0,
     scale_advdiff: 1.0,
     scale_smooth: 1.0,
+    scale_bc: 1.0,
 };
 
 /// 训练主循环。返回训练后的模型与逐 epoch 记录。
@@ -1106,6 +1113,7 @@ where
         let mut metrics = crate::data::RunningMetrics::new(n_channels);
         let mut parts_acc: Vec<LossParts> = Vec::new();
         let mut skipped = 0usize;
+        let mut last_report = crate::physics::PhysicsReport::default();
 
         for sel in crate::data::batch_indices(
             train.len(),
@@ -1114,18 +1122,31 @@ where
             false,
         ) {
             let (x, y) = train.batch5::<B>(&sel, device)?;
-            let out = model.forward_3d(x);
-
-            // 损失只吃 4D：先把深度维折进 batch 维
-            let (out4, b, d) = crate::physics::flatten_depth(out.clone());
-            let (y4, _, _) = crate::physics::flatten_depth(y.clone());
-            let _ = (b, d);
+            let out = model.forward_3d(x.clone());
 
             let mut step_cfg = loss.clone();
             step_cfg.epoch = epoch;
             step_cfg.total_epochs = cfg.epochs;
             step_cfg.scales = scaler.current();
-            let (l, parts) = step_cfg.compute(out4, y4);
+            if step_cfg.task == Task::Dispersion {
+                // 这一段此前**整个缺失**：`fit_3d` 从来没给 dispersion 切过速度通道，
+                // 于是 `fields.vx` 恒为 None，对流扩散残差恒为 None，物理项一直是
+                // 零占位符——训练照跑，物理约束一条都没有
+                let (vx, vy, vz) = slice_velocity_5d::<B>(
+                    &x,
+                    cfg.velocity_channels,
+                    cfg.velocity_channel_z,
+                )?;
+                step_cfg.velocity = Some((vx, vy));
+                step_cfg.velocity_z = vz;
+            }
+            // 走真三维：x / y 项仍由二维代码逐层算，z 项由 compute_3d 补上
+            let (l, parts) = step_cfg.compute_3d(out.clone(), y.clone())?;
+
+            // 三维路径此前**从来没报过物理残差**（EpochLog.physics 恒为 default），
+            // 于是 div_rms / ns_rms 一列都不落盘，诊断报告只能打「--」。
+            // 取最后一个 batch 的残差，与二维路径同口径
+            last_report = physics_report_3d_for::<B>(&step_cfg, out.clone().inner())?;
 
             if !parts.total.is_finite() {
                 eprintln!("[fit_3d] epoch {}：损失出现 NaN/Inf，跳过该 batch", epoch);
@@ -1174,7 +1195,7 @@ where
             val_rmse,
             lr,
             skipped_batches: skipped,
-            physics: crate::physics::PhysicsReport::default(),
+            physics: last_report,
             normalization_out_of_range: false,
         });
 
@@ -1302,6 +1323,7 @@ fn physics_report_for<B: AutodiffBackend>(
         diffusivity: loss.diffusivity,
         dx: loss.dx,
         dy: loss.dy,
+        dz: loss.dz,
         physics_warmup: loss.physics_warmup,
         scales: loss.scales,
         mask: loss.mask.clone().map(|m| m.inner()),
@@ -1310,6 +1332,12 @@ fn physics_report_for<B: AutodiffBackend>(
         velocity: None,
         dcdt: None,
         source: None,
+        boundary: loss.boundary.as_ref().map(|b| b.inner()),
+        z_axis: loss.z_axis,
+        velocity_z: None,
+        bc_weight: loss.bc_weight,
+        inlet_speed: loss.inlet_speed,
+        outlet_speed: loss.outlet_speed,
     };
     if cfg.task == Task::Dispersion {
         let [b, _, h, w] = x.dims();
@@ -1322,15 +1350,99 @@ fn physics_report_for<B: AutodiffBackend>(
     cfg.report(out)
 }
 
+/// 从 5D 输入张量里切出速度分量，并展平成损失吃的 4D。
+///
+/// 返回的顺序是 `(vx, vy, vz)`；`vz` 为 `None` 表示没给 `--velocity-channel-z`，
+/// 此时所有 z 项不参与——**不是按 0 算**，两者差别很大：按 0 算等于断言竖向速度
+/// 处处为零，那在有楼梯的地铁站里是错的。
+type Velocity3d<B> = (Tensor<B, 4>, Tensor<B, 4>, Option<Tensor<B, 4>>);
+
+fn slice_velocity_5d<B: AutodiffBackend>(
+    x: &Tensor<B, 5>,
+    xy: (usize, usize),
+    z: Option<usize>,
+) -> Result<Velocity3d<B>, String> {
+    let [b, n_in, d, h, w] = x.dims();
+    let pick = |i: usize, name: &str| -> Result<Tensor<B, 4>, String> {
+        if i >= n_in {
+            return Err(format!(
+                "{} 指定的通道 {} 超出输入通道数 {}，请检查数据集或该参数",
+                name, i, n_in
+            ));
+        }
+        Ok(crate::physics::flatten_depth(x.clone().slice([
+            0..b,
+            i..i + 1,
+            0..d,
+            0..h,
+            0..w,
+        ]))
+        .0)
+    };
+    let vx = pick(xy.0, "--velocity-channels")?;
+    let vy = pick(xy.1, "--velocity-channels")?;
+    let vz = match z {
+        None => None,
+        Some(i) => Some(pick(i, "--velocity-channel-z")?),
+    };
+    Ok((vx, vy, vz))
+}
+
+/// 在内层（非 autodiff）后端上算一次**三维**物理残差 RMS。
+///
+/// 与二维的 `physics_report_for` 同一个用途，只是走 5D 入口。dispersion 三维要
+/// 从输入通道切三个速度分量，这里暂不支持——`fit_3d` 目前只有 flow 一条路走得通，
+/// 接一半会让残差看起来「算了」而其实用的是二维速度。
+fn physics_report_3d_for<B: AutodiffBackend>(
+    loss: &PhysicsLoss<B>,
+    out: Tensor<B::InnerBackend, 5>,
+) -> Result<crate::physics::PhysicsReport, String> {
+    let cfg = PhysicsLoss::<B::InnerBackend> {
+        epoch: loss.epoch,
+        total_epochs: loss.total_epochs,
+        div_weight: loss.div_weight,
+        ns_weight: loss.ns_weight,
+        smooth_weight: loss.smooth_weight,
+        advdiff_weight: loss.advdiff_weight,
+        channel_order: loss.channel_order,
+        task: loss.task,
+        rho: loss.rho,
+        nu: loss.nu,
+        diffusivity: loss.diffusivity,
+        dx: loss.dx,
+        dy: loss.dy,
+        dz: loss.dz,
+        physics_warmup: loss.physics_warmup,
+        scales: loss.scales,
+        mask: loss.mask.clone().map(|m| m.inner()),
+        y_min: loss.y_min.clone(),
+        y_max: loss.y_max.clone(),
+        velocity: None,
+        dcdt: None,
+        source: None,
+        boundary: loss.boundary.as_ref().map(|b| b.inner()),
+        z_axis: None,
+        velocity_z: None,
+        bc_weight: loss.bc_weight,
+        inlet_speed: loss.inlet_speed,
+        outlet_speed: loss.outlet_speed,
+    };
+    cfg.report_3d(out)
+}
+
 /// 一行进度，格式对齐 `train.py`。
 ///
 /// 物理项**按任务分开报**：把 dispersion 的残差塞进 div/ns 的位置会让日志串味，
 /// 事后翻记录的人分不清那个数到底是什么。
 fn print_epoch(total: usize, l: &EpochLog, task: Task) {
-    let phys = match task {
+    let mut phys = match task {
         Task::Dispersion => format!("advdiff={:.3e}", l.train_loss.advdiff),
         Task::Flow => format!("div={:.3e} ns={:.3e}", l.train_loss.div, l.train_loss.ns),
     };
+    // 没有边界标签时 bc 恒为 0，多打一段只会让日志变吵——只在真的有约束时报
+    if l.train_loss.bc != 0.0 {
+        phys.push_str(&format!(" bc={:.3e}", l.train_loss.bc));
+    }
     println!(
         "epoch {:>4}/{}｜train R²={:.5} RMSE={:.5}｜test R²={:.5} RMSE={:.5}｜\
 base={:.4e} {} smooth={:.3e}｜lr={:.2e}",
@@ -1379,6 +1491,7 @@ pub fn save_stats(dir: &Path, logs: &[EpochLog]) -> Result<(), String> {
             "loss_smooth",
             logs.iter().map(|l| l.train_loss.smooth).collect(),
         ),
+        ("loss_bc", logs.iter().map(|l| l.train_loss.bc).collect()),
         ("r2_train", logs.iter().map(|l| l.train_r2).collect()),
         ("rmse_train", logs.iter().map(|l| l.train_rmse).collect()),
         ("r2_test", logs.iter().map(|l| l.val_r2).collect()),
@@ -1421,13 +1534,19 @@ fn write_test_series(
     }
 
     // 物理残差按 key 各归各位：把 dispersion 的残差硬塞进 div_rms 会让历史数据串味
-    for (name, pick) in [("div_rms", 0usize), ("ns_rms", 1), ("advdiff_rms", 2)] {
+    for (name, pick) in [
+        ("div_rms", 0usize),
+        ("ns_rms", 1),
+        ("advdiff_rms", 2),
+        ("bc_rms", 3),
+    ] {
         let vals: Vec<f64> = physics
             .iter()
             .filter_map(|p| match pick {
                 0 => p.div_rms,
                 1 => p.ns_rms,
-                _ => p.advdiff_rms,
+                2 => p.advdiff_rms,
+                _ => p.bc_rms,
             })
             .collect();
         // 本次任务没算的项不落盘，而不是写一列 nan——诊断侧读到文件就当它有意义
@@ -1500,13 +1619,19 @@ pub fn plot_history(dir: &Path, logs: &[EpochLog]) -> Result<(), String> {
     // ---- 物理残差 ----
     // 只画本次任务真的算了的项。flow 任务下 advdiff 恒为 None，画一条空曲线
     // 比不画更误导——看图的人会以为对流扩散约束开着。
-    for (name, pick) in [("div_rms", 0usize), ("ns_rms", 1), ("advdiff_rms", 2)] {
+    for (name, pick) in [
+        ("div_rms", 0usize),
+        ("ns_rms", 1),
+        ("advdiff_rms", 2),
+        ("bc_rms", 3),
+    ] {
         let vals: Vec<f32> = logs
             .iter()
             .filter_map(|l| match pick {
                 0 => l.physics.div_rms,
                 1 => l.physics.ns_rms,
-                _ => l.physics.advdiff_rms,
+                2 => l.physics.advdiff_rms,
+                _ => l.physics.bc_rms,
             })
             .map(|v| v as f32)
             .collect();

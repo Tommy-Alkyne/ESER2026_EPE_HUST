@@ -25,6 +25,8 @@ pub struct Args {
     pub task: String,
     pub channel_order: String,
     pub domain_size: [f64; 2],
+    /// 三维时的物理层高 Lz，决定 dz。二维路径不用
+    pub domain_height: f64,
     pub val_split: f64,
     pub no_mask: bool,
     pub t_geometry: Option<String>,
@@ -36,11 +38,26 @@ pub struct Args {
     pub smooth_weight: f64,
     pub diffusivity: f64,
     pub advdiff_weight: f64,
+    /// 边界条件残差权重（固壁不可穿透 / 无通量、风口法向速度）
+    pub bc_weight: f64,
+    /// 送风口风速 m/s，正值 = 向域内送。
+    ///
+    /// 用 `Option` 而不是默认 0：掩码里画了入口却不给风速，说明用户漏了参数。
+    /// 默认成 0 等于把入口当墙用，**不报错、结果全错**——这里要在启动时拦下来。
+    pub inlet_speed: Option<f64>,
+    /// 排风口风速 m/s，正值 = 从域内抽出。理由同上
+    pub outlet_speed: Option<f64>,
     pub physics_warmup: f64,
     pub physics_loss_scaling: String,
     pub physics_in_physical_units: bool,
     pub source_scale: f64,
     pub velocity_channels: (usize, usize),
+    /// dispersion 三维时竖向速度所在的输入通道。
+    ///
+    /// 单开一个旗标而不是让 `--velocity-channels` 收三个值：那个旗标在
+    /// [`PAIRS`] 里写死收两个，改成可变长会让「后面跟的到底是取值还是下一个旗标」
+    /// 变得有歧义，而歧义在这里就是静默取错通道。
+    pub velocity_channel_z: Option<usize>,
 
     pub epochs: usize,
     pub batch_size: usize,
@@ -85,6 +102,7 @@ impl Default for Args {
             task: "flow".into(),
             channel_order: "pvv".into(),
             domain_size: [1.0, 1.0],
+            domain_height: 1.0,
             val_split: 0.2,
             no_mask: false,
             t_geometry: None,
@@ -96,11 +114,15 @@ impl Default for Args {
             smooth_weight: 0.005,
             diffusivity: 1e-5,
             advdiff_weight: 0.05,
+            bc_weight: 0.05,
+            inlet_speed: None,
+            outlet_speed: None,
             physics_warmup: 0.1,
             physics_loss_scaling: "ema".into(),
             physics_in_physical_units: true,
             source_scale: 1.0,
             velocity_channels: (0, 1),
+            velocity_channel_z: None,
 
             epochs: 200,
             batch_size: 16,
@@ -151,6 +173,11 @@ impl Args {
         let dy = self.domain_size[0] / (grid_h.max(2) - 1) as f64;
         let dx = self.domain_size[1] / (grid_w.max(2) - 1) as f64;
         (dx, dy)
+    }
+
+    /// 层间距 dz。口径与 [`Self::spacing`] 一致：`Lz / (D - 1)`。
+    pub fn spacing_z(&self, grid_d: usize) -> f64 {
+        self.domain_height / (grid_d.max(2) - 1) as f64
     }
 }
 
@@ -243,10 +270,15 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
             "--smooth-weight" => a.smooth_weight = num(one()?)?,
             "--diffusivity" => a.diffusivity = num(one()?)?,
             "--advdiff-weight" => a.advdiff_weight = num(one()?)?,
+            "--bc-weight" => a.bc_weight = num(one()?)?,
+            "--inlet-speed" => a.inlet_speed = Some(num(one()?)?),
+            "--outlet-speed" => a.outlet_speed = Some(num(one()?)?),
             "--physics-warmup" => a.physics_warmup = num(one()?)?,
             "--physics-loss-scaling" => a.physics_loss_scaling = one()?.clone(),
             "--physics-in-physical-units" => a.physics_in_physical_units = parse_bool(one()?, key)?,
             "--source-scale" => a.source_scale = num(one()?)?,
+            "--domain-height" => a.domain_height = num(one()?)?,
+            "--velocity-channel-z" => a.velocity_channel_z = Some(non_negative(one()?)?),
             "--velocity-channels" => {
                 a.velocity_channels = (non_negative(&vals[0])?, non_negative(&vals[1])?)
             }
@@ -354,6 +386,12 @@ impl Args {
             return Err(format!(
                 "--task 只能是 flow 或 dispersion，实得 {:?}",
                 self.task
+            ));
+        }
+        if self.domain_height <= 0.0 {
+            return Err(format!(
+                "--domain-height 必须为正，实得 {}",
+                self.domain_height
             ));
         }
         if self.domain_size.iter().any(|v| *v <= 0.0) {

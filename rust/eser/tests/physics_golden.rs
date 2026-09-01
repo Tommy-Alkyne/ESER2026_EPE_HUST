@@ -76,7 +76,7 @@ fn divergence_and_losses_match_reference() {
         &read(&mut npz, "phys/divergence_field"),
     );
 
-    let div = divergence_loss(&f, Some(interior.clone()), PHYS_DX, PHYS_DY).unwrap();
+    let div = divergence_loss(&f, Some(interior.clone()), PHYS_DX, PHYS_DY, None).unwrap();
     assert_close_f64(
         "phys/div_loss",
         scalar(div),
@@ -90,6 +90,7 @@ fn divergence_and_losses_match_reference() {
         PHYS_NU,
         PHYS_DX,
         PHYS_DY,
+        None,
     )
     .unwrap();
     assert_close_f64(
@@ -116,10 +117,10 @@ fn missing_field_yields_none_not_wrong_number() {
     let one = fields4.slice([0..b, 0..1, 0..h, 0..w]);
     let f = split_fields(&one, ChannelOrder::Pvvt);
     assert!(
-        divergence_loss(&f, None, PHYS_DX, PHYS_DY).is_none(),
+        divergence_loss(&f, None, PHYS_DX, PHYS_DY, None).is_none(),
         "缺速度场时必须返回 None，而不是拿压力当速度算"
     );
-    assert!(navier_stokes_loss(&f, None, 1.0, 1e-2, PHYS_DX, PHYS_DY).is_none());
+    assert!(navier_stokes_loss(&f, None, 1.0, 1e-2, PHYS_DX, PHYS_DY, None).is_none());
 }
 
 #[test]
@@ -165,6 +166,7 @@ fn flow_loss(mask: burn::tensor::Tensor<B, 4>, y_min: Vec<f32>, y_max: Vec<f32>)
             ns: Some(3400.0),
             smooth: Some(7.0),
             advdiff: None,
+            bc: None,
         },
         mask: Some(mask),
         y_min: Some(y_min),
@@ -350,6 +352,7 @@ fn advection_diffusion_loss_matches_reference() {
         c: Some(c),
         vx: Some(vx),
         vy: Some(vy),
+        vz: None,
         p: None,
     };
     let loss = advection_diffusion_loss(
@@ -359,6 +362,7 @@ fn advection_diffusion_loss_matches_reference() {
         TR_DX,
         TR_DY,
         Some(dcdt),
+        None,
         None,
     )
     .expect("三个场齐全时不该返回 None");
@@ -374,7 +378,7 @@ fn advection_diffusion_loss_matches_reference() {
         ..Default::default()
     };
     assert!(
-        advection_diffusion_loss(&only_c, None, TR_D, TR_DX, TR_DY, None, None).is_none(),
+        advection_diffusion_loss(&only_c, None, TR_D, TR_DX, TR_DY, None, None, None).is_none(),
         "缺速度场时必须返回 None"
     );
 }

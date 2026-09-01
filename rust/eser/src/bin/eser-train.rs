@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use burn::backend::{Autodiff, NdArray};
 use burn::tensor::Tensor;
 
+use eser::boundary::{Boundary, BoundaryZone};
 use eser::cli::{self, Args};
 use eser::data::{load_train_val, CfdDataset, DatasetOptions};
 use eser::geometry;
@@ -56,7 +57,14 @@ eser-train —— Rust 版训练入口（旗标与 args.py 一致）
   --domain-size <Ly> <Lx>   物理域尺寸，决定 dx/dy
   --no-mask                 不用计算域掩码
   --domain-mask <路径>      .npy 栅格或 .json 矩形段（= --t-geometry）
+                            栅格支持分区标签：0 域外 1 流体 2 壁 3 入口 4 出口
+  --bc-weight <w>           边界条件残差权重（缺省 0.05）
+  --inlet-speed <q>         送风口风速 m/s，正值 = 送进域内。掩码里有入口就必须给
+  --outlet-speed <q>        排风口风速 m/s，正值 = 从域内抽出。掩码里有出口就必须给
   --ndim 3                  走 3D 模型
+  --domain-height <Lz>      三维物理层高，决定 dz（缺省 1.0）
+  --velocity-channel-z <i>  dispersion 三维时竖向速度所在的输入通道
+                            channel-order 用 pvvv / pvvvt 才有真三维流场物理
   --exp-dir / --exp-name    产物落到 <exp-dir>/<exp-name>
   --post                    只评估不训练：读 checkpoint 跑一次，落测试侧指标
   --ckpt-epoch <N>          配合 --post 指定 epoch<N>，缺省用 best
@@ -113,7 +121,17 @@ fn run(argv: &[String]) -> Result<(), String> {
         dx, dy, args.domain_size
     );
 
-    let mask = build_mask(&args, grid_h, grid_w, &device)?;
+    // 三维的深度层数：数据形状是 (N, C, D, H, W)
+    let grid_d = if args.ndim == 3 { y_shape[2] } else { 1 };
+    let dz = args.spacing_z(grid_d);
+    if args.ndim == 3 {
+        println!(
+            "[eser-train] 层数 {}，层间距 dz={:.6}（domain_height={}）",
+            grid_d, dz, args.domain_height
+        );
+    }
+
+    let (mask, boundary) = build_mask(&args, grid_d, grid_h, grid_w, &device)?;
 
     // ---- 损失 ----
     let order = ChannelOrder::parse(&args.channel_order)?;
@@ -141,11 +159,16 @@ fn run(argv: &[String]) -> Result<(), String> {
         diffusivity: args.diffusivity,
         dx,
         dy,
+        dz,
         physics_warmup: args.physics_warmup,
         scales: Scales::default(),
         mask,
         y_min,
         y_max,
+        boundary,
+        bc_weight: args.bc_weight,
+        inlet_speed: args.inlet_speed.unwrap_or(0.0),
+        outlet_speed: args.outlet_speed.unwrap_or(0.0),
         ..Default::default()
     };
 
@@ -164,6 +187,7 @@ fn run(argv: &[String]) -> Result<(), String> {
         verbose: true,
         physics_scaling: args.physics_loss_scaling == "ema",
         velocity_channels: args.velocity_channels,
+        velocity_channel_z: args.velocity_channel_z,
         hyper: checkpoint_hyper(&args),
     };
 
@@ -176,6 +200,19 @@ fn run(argv: &[String]) -> Result<(), String> {
     if args.post {
         return run_post(&args, &train, val.as_ref(), &loss, &fit_cfg, n_in, n_out, &y_shape,
                         grid_h, grid_w, &device);
+    }
+
+    if args.ndim == 3 {
+        if order.has_vz() || args.velocity_channel_z.is_some() {
+            println!("[eser-train] 三维物理已开：div / N-S / 对流扩散都含 ∂/∂z 项");
+        } else {
+            println!(
+                "[eser-train] 注意：通道口径 {:?} 没有第三个速度分量，\n\
+                 物理约束仍是**逐层二维**（div 只有 ∂u/∂x+∂v/∂y，没有 ∂w/∂z）。\n\
+                 要真三维请用 --channel-order pvvv，或 dispersion 下给 --velocity-channel-z",
+                args.channel_order
+            );
+        }
     }
 
     let logs = if args.ndim == 3 {
@@ -443,26 +480,101 @@ fn join_usize(v: &[usize]) -> String {
         .join(",")
 }
 
-/// 计算域掩码。`--no-mask` 时返回 `None`（损失退化成全场平均）。
+/// 计算域掩码 + 边界分区几何。两者都可能缺席，含义不同：
+/// 掩码 `None` = `--no-mask`（损失退化成全场平均）；边界 `None` = 这份几何没有分区标签。
+type Domain = (Option<Tensor<B, 4>>, Option<Boundary<B>>);
+
+/// 建计算域掩码与边界分区几何。
 fn build_mask(
     args: &Args,
+    d: usize,
     h: usize,
     w: usize,
     device: &<B as burn::tensor::backend::Backend>::Device,
-) -> Result<Option<Tensor<B, 4>>, String> {
+) -> Result<Domain, String> {
     if args.no_mask {
-        return Ok(None);
+        return Ok((None, None));
     }
     // 复用推理侧的几何解析：`.npy` 栅格、`.json` 矩形段、内联 JSON、缺省 T 型
     // 四条路都在那儿，不要在这里再写一份
     let spec = GeometrySpec::parse(args.t_geometry.as_deref())?;
+    // 掩码的层数由文件决定：2D 的 .npy 给 1 层，会被广播到所有深度层；
+    // 3D 的 (D, H, W) 必须与数据的层数一致，否则第 k 层会配到错误的轮廓
+    let mask_d = spec.depth();
+    if mask_d != 1 && mask_d != d {
+        return Err(format!(
+            "掩码是 {} 层，数据是 {} 层，对不上。\n\
+             二维掩码（一层）会广播到所有层，三维掩码必须逐层对应",
+            mask_d, d
+        ));
+    }
     let flat = spec.mask(h, w)?;
     let cov = geometry::coverage(&flat);
-    println!("[eser-train] 计算域覆盖率 {:.2}%", cov * 100.0);
-    Ok(Some(
-        Tensor::<B, 1>::from_data(burn::tensor::TensorData::from(flat.as_slice()), device)
-            .reshape([1, 1, h, w]),
-    ))
+    println!(
+        "[eser-train] 计算域覆盖率 {:.2}%{}",
+        cov * 100.0,
+        if mask_d > 1 {
+            format!("（{} 层逐层不同）", mask_d)
+        } else {
+            String::new()
+        }
+    );
+    // 第 0 维放深度：`PhysicsLoss::compute_3d` 就是按这个口径复制到 (B*D, C, H, W) 的
+    let mask = Tensor::<B, 1>::from_data(burn::tensor::TensorData::from(flat.as_slice()), device)
+        .reshape([mask_d, 1, h, w]);
+
+    let (dx, dy) = args.spacing(h, w);
+    let boundary = match spec.zones(h, w)? {
+        // 只在**真的画了边界标签**时拒绝。纯 0/1 的三维掩码没有边界要处理，照跑。
+        // 边界法向是二维的（∇ 只含 x/y），竖向边界（楼板、楼梯井壁）的法向带 z 分量，
+        // 这一版算不出来。宁可明说不支持，也不给一个「只约束了水平方向」却看着正常的东西
+        Some(z) if mask_d > 1 && geometry::zone_counts(&z)[2..].iter().any(|&n| n > 0) => {
+            return Err("三维掩码暂不支持边界分区标签（法向的 z 分量还没实现）；
+                        三维请先用只含 0/1 的掩码，或按二维逐层训练"
+                .into());
+        }
+        Some(_) if mask_d > 1 => None,
+        None => None,
+        Some(z) => {
+            let c = geometry::zone_counts(&z);
+            println!(
+                "[eser-train] 分区格点数：流体 {} / 壁 {} / 入口 {} / 出口 {}",
+                c[1], c[2], c[3], c[4]
+            );
+            Boundary::<B>::build(&z, h, w, dx, dy, device)
+        }
+    };
+
+    match &boundary {
+        None => println!(
+            "[eser-train] 这份几何没有边界标签，**不加任何边界条件约束**\n\
+             （想加的话把掩码 .npy 里的墙画成 2、送风口 3、排风口 4）"
+        ),
+        Some(b) => {
+            let n = |z: &Option<BoundaryZone<B>>| {
+                z.as_ref().map(|v| v.count).unwrap_or(0)
+            };
+            println!(
+                "[eser-train] 贴边流体格点：壁 {} / 入口 {} / 出口 {}（边界权重 {}）",
+                n(&b.wall),
+                n(&b.inlet),
+                n(&b.outlet),
+                args.bc_weight
+            );
+            // 画了风口却不给风速 = 参数漏了。默认成 0 等于把风口当墙，
+            // 结果全错却不会报任何错，正是本项目一路在防的那类静默失败
+            if b.inlet.is_some() && args.inlet_speed.is_none() {
+                return Err("掩码里有送风口（标签 3），必须用 --inlet-speed 给出风速".into());
+            }
+            if b.outlet.is_some() && args.outlet_speed.is_none() {
+                return Err("掩码里有排风口（标签 4），必须用 --outlet-speed 给出风速".into());
+            }
+            if args.bc_weight <= 0.0 {
+                println!("[eser-train] 警告：--bc-weight = 0，边界条件只监控、不约束");
+            }
+        }
+    }
+    Ok((Some(mask), boundary))
 }
 
 fn resolve_train_file(args: &Args) -> Result<PathBuf, String> {
@@ -513,6 +625,17 @@ fn write_args_snapshot(dir: &Path, args: &Args, train_path: &Path) -> Result<(),
     push("ns_weight", format!("{:?}", args.ns_weight));
     push("smooth_weight", format!("{:?}", args.smooth_weight));
     push("advdiff_weight", format!("{:?}", args.advdiff_weight));
+    push("bc_weight", format!("{:?}", args.bc_weight));
+    push("domain_height", format!("{:?}", args.domain_height));
+    if let Some(i) = args.velocity_channel_z {
+        push("velocity_channel_z", i.to_string());
+    }
+    if let Some(q) = args.inlet_speed {
+        push("inlet_speed", format!("{:?}", q));
+    }
+    if let Some(q) = args.outlet_speed {
+        push("outlet_speed", format!("{:?}", q));
+    }
     push("diffusivity", format!("{:?}", args.diffusivity));
     push("physics_warmup", format!("{:?}", args.physics_warmup));
     push(

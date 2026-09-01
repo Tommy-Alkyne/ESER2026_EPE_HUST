@@ -263,3 +263,141 @@ fn train_then_diagnose_reads_what_training_wrote() {
 
     let _ = std::fs::remove_dir_all(&exp_dir);
 }
+
+/// 造一份带边界分区标签的栅格掩码：外圈墙，左右墙中段各挖一个风口。
+///
+/// 标签口径见 `eser::geometry::Zone`：0 域外 / 1 流体 / 2 壁 / 3 入口 / 4 出口。
+fn zoned_mask(path: &Path, h: usize, w: usize) {
+    let mut z = vec![0.0f32; h * w];
+    let put = |z: &mut Vec<f32>, y: usize, x: usize, v: f32| z[y * w + x] = v;
+    for y in 2..h - 2 {
+        for x in 2..w - 2 {
+            put(&mut z, y, x, 1.0);
+        }
+    }
+    for x in 1..w - 1 {
+        put(&mut z, 1, x, 2.0);
+        put(&mut z, h - 2, x, 2.0);
+    }
+    for y in 1..h - 1 {
+        put(&mut z, y, 1, 2.0);
+        put(&mut z, y, w - 2, 2.0);
+    }
+    // 左墙中段 = 送风口，右墙中段 = 排风口
+    for y in h / 2 - 1..h / 2 + 1 {
+        put(&mut z, y, 1, 3.0);
+        put(&mut z, y, w - 2, 4.0);
+    }
+    let arr = ndarray::Array2::from_shape_vec((h, w), z).unwrap();
+    ndarray_npy::write_npy(path, &arr).expect("写不了 .npy 掩码");
+}
+
+/// 分区掩码要真的走到损失里：**画了风口不给风速必须报错**，给了就得出现 bc 项。
+///
+/// 这条盯的是「静默失效」——边界标签解析对了、`Boundary` 也建出来了，但只要
+/// `PhysicsLoss` 那头没接上，训练照样跑完、日志照样好看，而边界条件一条都没加。
+#[test]
+fn zoned_mask_actually_reaches_the_loss() {
+    let exp_dir = std::env::temp_dir().join(format!("eser_bc_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&exp_dir);
+    std::fs::create_dir_all(&exp_dir).unwrap();
+    let dataset = exp_dir.join("tiny.hdf5");
+    tiny_dataset(&dataset);
+    let mask = exp_dir.join("zoned.npy");
+    zoned_mask(&mask, 16, 16);
+
+    let run = |extra: &[&str]| {
+        let mut args = vec![
+            "--train-file",
+            dataset.to_str().unwrap(),
+            "--task",
+            "flow",
+            "--channel-order",
+            "pvv",
+            "--domain-mask",
+            mask.to_str().unwrap(),
+            "--epochs",
+            "2",
+            "--batch-size",
+            "4",
+            "--blocks",
+            "2,2,2",
+            "--growth-rate",
+            "4",
+            "--init-features",
+            "8",
+            "--exp-dir",
+            exp_dir.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        let out = Command::new(bin("eser-train"))
+            .args(&args)
+            .output()
+            .expect("起不了 eser-train");
+        // 合并 stdout / stderr：报错走的是 stderr，只看 stdout 会漏掉它
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+
+    // ---- 画了风口却不给风速：必须报错停下 ----
+    let (ok, log) = run(&["--exp-name", "missing"]);
+    assert!(
+        !ok,
+        "掩码里有风口却没给 --inlet-speed，必须报错而不是默默当成 0（等于把风口当墙用）\n{}",
+        log
+    );
+    assert!(
+        log.contains("--inlet-speed"),
+        "报错信息里要指名缺的是哪个参数\n{}",
+        log
+    );
+
+    // ---- 给齐了：边界项必须真的出现在损失里 ----
+    let (ok, log) = run(&[
+        "--exp-name",
+        "bc",
+        "--inlet-speed",
+        "1.5",
+        "--outlet-speed",
+        "1.5",
+    ]);
+    assert!(ok, "给齐风速后训练应当成功\n{}", log);
+    assert!(
+        log.contains("分区格点数：") && log.contains("贴边流体格点："),
+        "启动自检要报出各分区与贴边格点数，否则掩码画错了没人看得出来\n{}",
+        log
+    );
+    let with_bc = log
+        .lines()
+        .filter(|l| l.starts_with("epoch ") && l.contains("bc="))
+        .count();
+    assert_eq!(with_bc, 2, "每轮进度都要带 bc 分项\n{}", log);
+
+    // 落盘的曲线也要有，诊断侧只认这些文件
+    let train_dir = exp_dir.join("bc").join("training");
+    for f in ["loss_bc.txt", "bc_rms.txt", "bc_rms.svg"] {
+        assert!(train_dir.join(f).is_file(), "缺产物 {}", f);
+    }
+    let lines = std::fs::read_to_string(train_dir.join("bc_rms.txt"))
+        .unwrap()
+        .lines()
+        .count();
+    assert_eq!(lines, 2, "bc_rms.txt 应当每轮一行");
+
+    // ---- 对照：同一份数据不给分区掩码，就不该有 bc ----
+    let (ok, log) = run(&["--exp-name", "plain", "--no-mask"]);
+    assert!(ok, "无掩码跑法应当仍然成功\n{}", log);
+    assert!(
+        !log.contains("bc="),
+        "没有边界标签时不该冒出 bc 分项——那说明它在拿默认值瞎算\n{}",
+        log
+    );
+
+    let _ = std::fs::remove_dir_all(&exp_dir);
+}

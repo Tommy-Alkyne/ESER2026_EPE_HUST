@@ -34,6 +34,10 @@ pub enum ChannelOrder {
     Pvvt,
     /// 只有浓度一个通道，速度场从输入通道喂进来（地铁站方案阶段二）
     C,
+    /// (P, Vx, Vy, Vz) —— 三维流场
+    Pvvv,
+    /// (P, Vx, Vy, Vz, T)。T 只作为输出学习，**不参与任何残差**
+    Pvvvt,
 }
 
 impl ChannelOrder {
@@ -43,20 +47,29 @@ impl ChannelOrder {
             "vvp" => Ok(Self::Vvp),
             "pvvt" => Ok(Self::Pvvt),
             "c" => Ok(Self::C),
+            "pvvv" => Ok(Self::Pvvv),
+            "pvvvt" => Ok(Self::Pvvvt),
             other => Err(format!(
-                "未知的 channel_order={:?}，可选 c / pvv / pvvt / vvp",
+                "未知的 channel_order={:?}，可选 c / pvv / pvvt / pvvv / pvvvt / vvp",
                 other
             )),
         }
     }
 
     /// `(p, vx, vy, c)` 各自的通道下标；`None` 表示这个顺序里没有该物理量。
-    pub fn indices(self) -> [Option<usize>; 4] {
+    /// 各物理量在通道维的下标：`[p, vx, vy, vz, c]`。
+    pub fn indices(self) -> [Option<usize>; 5] {
         match self {
-            Self::Pvv | Self::Pvvt => [Some(0), Some(1), Some(2), None],
-            Self::Vvp => [Some(2), Some(0), Some(1), None],
-            Self::C => [None, None, None, Some(0)],
+            Self::Pvv | Self::Pvvt => [Some(0), Some(1), Some(2), None, None],
+            Self::Vvp => [Some(2), Some(0), Some(1), None, None],
+            Self::C => [None, None, None, None, Some(0)],
+            Self::Pvvv | Self::Pvvvt => [Some(0), Some(1), Some(2), Some(3), None],
         }
+    }
+
+    /// 这个通道口径带不带第三个速度分量。
+    pub fn has_vz(self) -> bool {
+        matches!(self, Self::Pvvv | Self::Pvvvt)
     }
 }
 
@@ -67,6 +80,8 @@ pub struct Fields<B: Backend> {
     pub p: Option<Tensor<B, 4>>,
     pub vx: Option<Tensor<B, 4>>,
     pub vy: Option<Tensor<B, 4>>,
+    /// 竖向速度。只有三维口径才有；二维路径恒为 `None`，所有 z 项因此自动不算
+    pub vz: Option<Tensor<B, 4>>,
     pub c: Option<Tensor<B, 4>>,
 }
 
@@ -80,11 +95,12 @@ pub fn split_fields<B: Backend>(x: &Tensor<B, 4>, order: ChannelOrder) -> Fields
         let i = i?;
         (i < nc).then(|| x.clone().slice([0..b, i..i + 1, 0..h, 0..w]))
     };
-    let [p, vx, vy, c] = order.indices();
+    let [p, vx, vy, vz, c] = order.indices();
     Fields {
         p: take(p),
         vx: take(vx),
         vy: take(vy),
+        vz: take(vz),
         c: take(c),
     }
 }
@@ -140,6 +156,55 @@ fn single_channel<B: Backend>(m: Tensor<B, 4>) -> Tensor<B, 4> {
     }
 }
 
+// ---------------------------------------------------------------- 深度轴
+
+/// 三维时的深度轴上下文。
+///
+/// 三维残差 = **现有二维代码逐层算出来的 x/y 项** + 这里补的 z 项。这样安排是为了
+/// 让 `tests/golden/golden.npz` 里 502 个冻结张量覆盖的那条路径一个字都不改——
+/// 另写一份三维公式的话，二维和三维会各自漂移，而且没有任何参考数据能发现。
+///
+/// `None` 表示二维：所有 z 项一概不算，不是「按 0 算」。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZAxis {
+    /// 展平前的 batch 数
+    pub b: usize,
+    /// 深度层数
+    pub d: usize,
+    /// 层间距（真实物理长度）
+    pub dz: f64,
+}
+
+impl ZAxis {
+    /// 中心差分要求上下各有一层邻居，`d < 3` 时**任何**格点都算不出 ∂/∂z。
+    pub fn check(&self) -> Result<(), String> {
+        if self.d < 3 {
+            return Err(format!(
+                "深度只有 {} 层：z 方向中心差分在任何格点上都不成立，\n\
+                 三维物理项无法计算。要么给至少 3 层，要么按二维逐层训练",
+                self.d
+            ));
+        }
+        if self.dz <= 0.0 || self.dz.is_nan() {
+            return Err(format!("层间距 dz 必须为正，实得 {}", self.dz));
+        }
+        Ok(())
+    }
+}
+
+/// 对**已展平成 4D** 的场求 z 方向导数：还原成 5D、求导、再展平回去。
+///
+/// `second = true` 取二阶导（补全三维 Laplacian），否则一阶。
+pub fn dz_of<B: Backend>(x: Tensor<B, 4>, z: ZAxis, second: bool) -> Tensor<B, 4> {
+    let x5 = unflatten_depth(x, z.b, z.d);
+    let g = if second {
+        crate::ops::second_diff_z(x5, z.dz)
+    } else {
+        crate::ops::grad_z(x5, z.dz)
+    };
+    flatten_depth(g).0
+}
+
 // ---------------------------------------------------------------- 各项损失
 
 /// 连续性方程左端 `div(v) = dvx/dx + dvy/dy`。
@@ -160,9 +225,15 @@ pub fn divergence_loss<B: Backend>(
     mask: Option<Tensor<B, 4>>,
     dx: f64,
     dy: f64,
+    z: Option<ZAxis>,
 ) -> Option<Tensor<B, 1>> {
     let (vx, vy) = (fields.vx.clone()?, fields.vy.clone()?);
-    let d = divergence(vx, vy, dx, dy);
+    let mut d = divergence(vx, vy, dx, dy);
+    // 三维的连续性方程是 ∂u/∂x + ∂v/∂y + ∂w/∂z = 0。少了第三项就不是不可压条件，
+    // 而且**数值上照样收敛**——网络会学出一个二维意义上无散、三维意义上错的场
+    if let (Some(z), Some(vz)) = (z, fields.vz.clone()) {
+        d = d + dz_of(vz, z, false);
+    }
     Some(masked_mean(d.clone() * d, mask))
 }
 
@@ -179,22 +250,61 @@ pub fn navier_stokes_loss<B: Backend>(
     nu: f64,
     dx: f64,
     dy: f64,
+    z: Option<ZAxis>,
 ) -> Option<Tensor<B, 1>> {
+    let moms = navier_stokes_residual(fields, rho, nu, dx, dy, z)?;
+    Some(
+        moms.into_iter()
+            .map(|m| masked_mean(m.clone() * m, mask.clone()))
+            .reduce(|a, b| a + b)
+            .expect("动量残差至少有 x / y 两个分量"),
+    )
+}
+
+/// N-S 动量残差**的各个分量场**（二维两个、三维三个）。
+///
+/// 单独拆出来而不是塞在 `navier_stokes_loss` 里：三维要在这些场上继续加 z 项，
+/// 拆开才能保证损失和诊断用的是同一份公式。
+pub fn navier_stokes_residual<B: Backend>(
+    fields: &Fields<B>,
+    rho: f64,
+    nu: f64,
+    dx: f64,
+    dy: f64,
+    z: Option<ZAxis>,
+) -> Option<Vec<Tensor<B, 4>>> {
     let (vx, vy, p) = (fields.vx.clone()?, fields.vy.clone()?, fields.p.clone()?);
 
     let (dvx_dx, dvx_dy) = grad_xy(vx.clone(), dx, dy);
     let (dvy_dx, dvy_dy) = grad_xy(vy.clone(), dx, dy);
-    let (dp_dx, dp_dy) = grad_xy(p, dx, dy);
+    let (dp_dx, dp_dy) = grad_xy(p.clone(), dx, dy);
     let lap_vx = laplacian(vx.clone(), dx, dy);
     let lap_vy = laplacian(vy.clone(), dx, dy);
 
-    let mom_x =
-        vx.clone() * dvx_dx + vy.clone() * dvx_dy + dp_dx.div_scalar(rho) - lap_vx.mul_scalar(nu);
-    let mom_y = vx * dvy_dx + vy * dvy_dy + dp_dy.div_scalar(rho) - lap_vy.mul_scalar(nu);
+    let mut mom_x = vx.clone() * dvx_dx + vy.clone() * dvx_dy + dp_dx.div_scalar(rho)
+        - lap_vx.mul_scalar(nu);
+    let mut mom_y =
+        vx.clone() * dvy_dx + vy.clone() * dvy_dy + dp_dy.div_scalar(rho) - lap_vy.mul_scalar(nu);
 
-    Some(
-        masked_mean(mom_x.clone() * mom_x, mask.clone()) + masked_mean(mom_y.clone() * mom_y, mask),
-    )
+    let (Some(z), Some(vz)) = (z, fields.vz.clone()) else {
+        return Some(vec![mom_x, mom_y]);
+    };
+
+    // x / y 分量补上竖向对流 w·∂/∂z 与竖向粘性 ν·∂²/∂z²
+    mom_x = mom_x + vz.clone() * dz_of(vx.clone(), z, false)
+        - dz_of(vx.clone(), z, true).mul_scalar(nu);
+    mom_y = mom_y + vz.clone() * dz_of(vy.clone(), z, false)
+        - dz_of(vy.clone(), z, true).mul_scalar(nu);
+
+    // 第三个动量方程。没有它，竖向速度只受连续性方程约束——楼梯口的竖向流会
+    // 学成一个满足质量守恒但完全不符合动量守恒的场
+    let (dvz_dx, dvz_dy) = grad_xy(vz.clone(), dx, dy);
+    let dp_dz = dz_of(p, z, false);
+    let mom_z = vx * dvz_dx + vy * dvz_dy + vz.clone() * dz_of(vz.clone(), z, false)
+        + dp_dz.div_scalar(rho)
+        - (laplacian(vz.clone(), dx, dy) + dz_of(vz, z, true)).mul_scalar(nu);
+
+    Some(vec![mom_x, mom_y, mom_z])
 }
 
 /// 全场一阶导 L1，抑制棋盘伪影。只统计计算域内部。
@@ -248,6 +358,9 @@ pub struct Scales {
     pub ns: Option<f64>,
     pub advdiff: Option<f64>,
     pub smooth: Option<f64>,
+    /// 边界条件残差。量级是 O(v²)，比 div 的 O((v/dx)²) 小好几个数量级，
+    /// 不单独归一化的话边界项在总损失里根本看不见。
+    pub bc: Option<f64>,
 }
 
 impl Scales {
@@ -266,15 +379,19 @@ pub struct LossParts {
     pub ns: f64,
     pub advdiff: f64,
     pub smooth: f64,
+    /// 边界条件残差合计（固壁不可穿透 / 无通量、风口法向速度）
+    pub bc: f64,
     pub total: f64,
     pub w_div: f64,
     pub w_ns: f64,
     pub w_advdiff: f64,
     pub w_smooth: f64,
+    pub w_bc: f64,
     pub scale_div: f64,
     pub scale_ns: f64,
     pub scale_advdiff: f64,
     pub scale_smooth: f64,
+    pub scale_bc: f64,
 }
 
 /// 诊断用的有量纲物理残差 RMS。没算的项是 `None`（Python 侧是 nan）。
@@ -283,6 +400,8 @@ pub struct PhysicsReport {
     pub div_rms: Option<f64>,
     pub ns_rms: Option<f64>,
     pub advdiff_rms: Option<f64>,
+    /// 边界条件残差 RMS。`None` 表示这次几何里根本没有边界标签
+    pub bc_rms: Option<f64>,
 }
 
 /// 数据项 + 物理项的组合损失。
@@ -327,6 +446,8 @@ pub struct PhysicsLoss<B: Backend> {
     /// 真实网格间距 domain_size / (N - 1)
     pub dx: f64,
     pub dy: f64,
+    /// 层间距。只有三维路径用得到；二维时取什么值都不影响结果
+    pub dz: f64,
     /// 前多少比例的 epoch 完全不加物理约束（0~1）
     pub physics_warmup: f64,
     pub scales: Scales,
@@ -341,6 +462,18 @@ pub struct PhysicsLoss<B: Backend> {
     pub dcdt: Option<Tensor<B, 4>>,
     /// 源项 S
     pub source: Option<Tensor<B, 4>>,
+    /// 边界分区几何。`None` = 这次几何没有边界标签，所有边界项自动不算
+    pub boundary: Option<crate::boundary::Boundary<B>>,
+    /// 深度轴。`None` = 二维；三维路径由 `compute_3d` 自动填
+    pub z_axis: Option<ZAxis>,
+    /// 仅 dispersion 三维用：**有量纲**竖向速度场，来自网络输入通道
+    pub velocity_z: Option<Tensor<B, 4>>,
+    /// 边界条件残差的权重
+    pub bc_weight: f64,
+    /// 送风口风速（m/s，正值 = 向域内送风）
+    pub inlet_speed: f64,
+    /// 排风口风速（m/s，正值 = 从域内抽出）
+    pub outlet_speed: f64,
 }
 
 impl<B: Backend> Default for PhysicsLoss<B> {
@@ -359,6 +492,7 @@ impl<B: Backend> Default for PhysicsLoss<B> {
             diffusivity: 1e-5,
             dx: 1.0,
             dy: 1.0,
+            dz: 1.0,
             physics_warmup: 0.0,
             scales: Scales::default(),
             mask: None,
@@ -367,6 +501,12 @@ impl<B: Backend> Default for PhysicsLoss<B> {
             velocity: None,
             dcdt: None,
             source: None,
+            boundary: None,
+            z_axis: None,
+            velocity_z: None,
+            bc_weight: 0.05,
+            inlet_speed: 0.0,
+            outlet_speed: 0.0,
         }
     }
 }
@@ -385,6 +525,7 @@ impl<B: Backend> PhysicsLoss<B> {
                 fields.vx = Some(vx);
                 fields.vy = Some(vy);
             }
+            fields.vz = self.velocity_z.clone();
         }
         fields
     }
@@ -418,7 +559,7 @@ impl<B: Backend> PhysicsLoss<B> {
         let zero = output.sum().mul_scalar(0.0);
         let mut div_loss = zero.clone();
         let mut ns_loss = zero.clone();
-        let mut advdiff_loss = zero;
+        let mut advdiff_loss = zero.clone();
 
         match self.task {
             Task::Dispersion => {
@@ -431,6 +572,7 @@ impl<B: Backend> PhysicsLoss<B> {
                         self.dy,
                         self.dcdt.clone(),
                         self.source.clone(),
+                        self.z_axis,
                     ) {
                         advdiff_loss = got;
                     }
@@ -438,7 +580,8 @@ impl<B: Backend> PhysicsLoss<B> {
             }
             Task::Flow => {
                 if self.div_weight > 0.0 {
-                    if let Some(got) = divergence_loss(&fields, interior.clone(), self.dx, self.dy)
+                    if let Some(got) =
+                        divergence_loss(&fields, interior.clone(), self.dx, self.dy, self.z_axis)
                     {
                         div_loss = got;
                     }
@@ -451,12 +594,16 @@ impl<B: Backend> PhysicsLoss<B> {
                         self.nu,
                         self.dx,
                         self.dy,
+                        self.z_axis,
                     ) {
                         ns_loss = got;
                     }
                 }
             }
         }
+
+        // 没有边界标签时用 0 占位，保持计算图连通（与上面几项同一套路）
+        let bc_loss = self.boundary_loss(&fields).unwrap_or(zero);
 
         let smooth = smoothness_loss(phys, interior, self.dx, self.dy);
 
@@ -465,11 +612,13 @@ impl<B: Backend> PhysicsLoss<B> {
         let w_ns = self.ns_weight * (1.0 + ramp);
         let w_advdiff = self.advdiff_weight * (1.0 + ramp);
         let w_smooth = self.smooth_weight * (1.0 - 0.5 * ramp);
+        let w_bc = self.bc_weight * (1.0 + ramp);
 
         let s_div = Scales::or_one(self.scales.div);
         let s_ns = Scales::or_one(self.scales.ns);
         let s_advdiff = Scales::or_one(self.scales.advdiff);
         let s_smooth = Scales::or_one(self.scales.smooth);
+        let s_bc = Scales::or_one(self.scales.bc);
 
         let total = base.clone()
             + div_loss.clone().mul_scalar(w_div).div_scalar(s_div)
@@ -478,7 +627,8 @@ impl<B: Backend> PhysicsLoss<B> {
                 .clone()
                 .mul_scalar(w_advdiff)
                 .div_scalar(s_advdiff)
-            + smooth.clone().mul_scalar(w_smooth).div_scalar(s_smooth);
+            + smooth.clone().mul_scalar(w_smooth).div_scalar(s_smooth)
+            + bc_loss.clone().mul_scalar(w_bc).div_scalar(s_bc);
 
         let parts = LossParts {
             base: scalar(base),
@@ -486,17 +636,112 @@ impl<B: Backend> PhysicsLoss<B> {
             ns: scalar(ns_loss),
             advdiff: scalar(advdiff_loss),
             smooth: scalar(smooth),
+            bc: scalar(bc_loss),
             total: scalar(total.clone()),
             w_div,
             w_ns,
             w_advdiff,
             w_smooth,
+            w_bc,
             scale_div: s_div,
             scale_ns: s_ns,
             scale_advdiff: s_advdiff,
             scale_smooth: s_smooth,
+            scale_bc: s_bc,
         };
         (total, parts)
+    }
+
+    /// 这次前向到底用不用得上 z 项，以及层数够不够。
+    ///
+    /// **没有第三个速度分量就不算「三维物理」**：`--ndim 3` 只是说网络是三维卷积，
+    /// 通道口径仍可能是二维的（P, Vx, Vy）。那种情况下所有 z 项本来就不参与，
+    /// 层数只有 2 层也没关系——退回逐层二维，与本次改动之前的行为完全一致。
+    ///
+    /// 反过来，真要算 z 项却只给 2 层，就必须报错：中心差分在任何格点上都不成立，
+    /// 算出来的是个没有意义的数，而且不会报错。
+    fn resolve_z(&self, b: usize, d: usize) -> Result<Option<ZAxis>, String> {
+        if !(self.channel_order.has_vz() || self.velocity_z.is_some()) {
+            return Ok(None);
+        }
+        let z = ZAxis { b, d, dz: self.dz };
+        z.check()?;
+        Ok(Some(z))
+    }
+
+    /// 三维版本：吃 (B, C, D, H, W)，把深度维折进 batch 维后走**同一条**损失路径，
+    /// 并把 z 方向的项接上。
+    ///
+    /// 掩码按深度存在 `mask` 的第 0 维（二维时该维恒为 1），这里复制 B 份对齐展平
+    /// 后的 (B*D, C, H, W)。顺序必须是「b 外 d 内」，与 [`flatten_depth`] 一致。
+    pub fn compute_3d(
+        &self,
+        output: Tensor<B, 5>,
+        target: Tensor<B, 5>,
+    ) -> Result<(Tensor<B, 1>, LossParts), String> {
+        let (out4, b, d) = flatten_depth(output);
+        let (y4, _, _) = flatten_depth(target);
+        let cfg = Self {
+            z_axis: self.resolve_z(b, d)?,
+            mask: self.mask.clone().map(|m| tile_along_batch(m, b)),
+            ..self.clone()
+        };
+        Ok(cfg.compute(out4, y4))
+    }
+
+    /// 三维版本的残差诊断。参数含义同 [`Self::compute_3d`]。
+    pub fn report_3d(&self, output: Tensor<B, 5>) -> Result<PhysicsReport, String> {
+        let (out4, b, d) = flatten_depth(output);
+        let cfg = Self {
+            z_axis: self.resolve_z(b, d)?,
+            mask: self.mask.clone().map(|m| tile_along_batch(m, b)),
+            ..self.clone()
+        };
+        Ok(cfg.report(out4))
+    }
+
+    /// 边界条件残差合计。没有边界标签、或者该任务下没有可约束的场时返回 `None`。
+    ///
+    /// **按任务分派，不是两个都算**：
+    /// * `Flow` 约束速度——速度是网络输出，约束它才有梯度
+    /// * `Dispersion` 约束浓度的法向导数——这个任务里速度来自**输入通道**，
+    ///   是固定的数据，对它加约束一点梯度都没有，纯属白算
+    fn boundary_loss(&self, fields: &Fields<B>) -> Option<Tensor<B, 1>> {
+        let b = self.boundary.as_ref()?;
+        let mut acc: Option<Tensor<B, 1>> = None;
+        let mut add = |t: Tensor<B, 1>| {
+            acc = Some(match acc.take() {
+                None => t,
+                Some(prev) => prev + t,
+            });
+        };
+        match self.task {
+            Task::Flow => {
+                let (vx, vy) = (fields.vx.clone()?, fields.vy.clone()?);
+                for (zone, target) in [
+                    (b.wall.as_ref(), 0.0),
+                    // 外法向朝域外，所以「送进来」是负、「抽出去」是正
+                    (b.inlet.as_ref(), -self.inlet_speed),
+                    (b.outlet.as_ref(), self.outlet_speed),
+                ] {
+                    if let Some(z) = zone {
+                        add(crate::boundary::normal_velocity_loss(
+                            vx.clone(),
+                            vy.clone(),
+                            z,
+                            target,
+                        ));
+                    }
+                }
+            }
+            Task::Dispersion => {
+                let c = fields.c.clone()?;
+                if let Some(z) = b.wall.as_ref() {
+                    add(crate::boundary::normal_gradient_loss(c, z, self.dx, self.dy));
+                }
+            }
+        }
+        acc
     }
 
     /// 诊断用：有量纲物理残差 RMS，判断物理约束是否真的生效。
@@ -512,6 +757,9 @@ impl<B: Backend> PhysicsLoss<B> {
         let fields = self.fields(&phys);
         let interior = self.interior();
 
+        // 边界残差与权重无关地报出来——bc_weight = 0 时也要能监控它有没有恶化
+        let bc_rms = self.boundary_loss(&fields).map(|t| scalar(t.sqrt()));
+
         match self.task {
             Task::Dispersion => PhysicsReport {
                 advdiff_rms: advection_diffusion_loss(
@@ -522,19 +770,41 @@ impl<B: Backend> PhysicsLoss<B> {
                     self.dy,
                     self.dcdt.clone(),
                     self.source.clone(),
+                    self.z_axis,
                 )
                 .map(|t| scalar(t.sqrt())),
+                bc_rms,
                 ..Default::default()
             },
             Task::Flow => PhysicsReport {
-                div_rms: divergence_loss(&fields, interior.clone(), self.dx, self.dy)
+                div_rms: divergence_loss(&fields, interior.clone(), self.dx, self.dy, self.z_axis)
                     .map(|t| scalar(t.sqrt())),
-                ns_rms: navier_stokes_loss(&fields, interior, self.rho, self.nu, self.dx, self.dy)
-                    .map(|t| scalar(t.sqrt())),
+                ns_rms: navier_stokes_loss(
+                    &fields,
+                    interior,
+                    self.rho,
+                    self.nu,
+                    self.dx,
+                    self.dy,
+                    self.z_axis,
+                )
+                .map(|t| scalar(t.sqrt())),
                 advdiff_rms: None,
+                bc_rms,
             },
         }
     }
+}
+
+/// 把 (D, 1, H, W) 的逐层掩码复制 `b` 份，得到与展平后的 (B*D, C, H, W) 对齐的形状。
+///
+/// 顺序是 `[层0..层D-1, 层0..层D-1, ...]`，正好对上 [`flatten_depth`] 给出的
+/// `b * D + d`。搞反成「层内复制」不会报错，只会让每个样本配到错误的那一层掩码。
+fn tile_along_batch<B: Backend>(m: Tensor<B, 4>, b: usize) -> Tensor<B, 4> {
+    if b <= 1 {
+        return m;
+    }
+    Tensor::cat((0..b).map(|_| m.clone()).collect::<Vec<_>>(), 0)
 }
 
 /// 取标量值（等价于 Python 的 `float(t.detach())`）。
@@ -594,6 +864,7 @@ impl PhysicsScaler {
         ema(&mut self.state.ns, parts.ns, m);
         ema(&mut self.state.advdiff, parts.advdiff, m);
         ema(&mut self.state.smooth, parts.smooth, m);
+        ema(&mut self.state.bc, parts.bc, m);
     }
 }
 
@@ -759,6 +1030,77 @@ mod tests {
         );
     }
 
+    /// 边界项必须**真的进总损失**，不是只算出来打个日志。
+    ///
+    /// 这条补的是集成测试的一个洞：那边只验了进度行里有 `bc=`，而 `parts.bc` 是
+    /// 无条件算的——就算 `total` 里根本没加这一项，日志照样好看、训练照样跑完，
+    /// 边界条件却一条都没起作用。
+    #[test]
+    fn boundary_term_is_actually_added_to_the_total() {
+        use crate::boundary::Boundary;
+        use crate::geometry::Zone;
+
+        let device = Default::default();
+        let (h, w) = (6usize, 8usize);
+
+        // 左边流体、右边墙
+        let mut z = vec![Zone::Fluid.label(); h * w];
+        for y in 0..h {
+            for x in 5..w {
+                z[y * w + x] = Zone::Wall.label();
+            }
+        }
+        let boundary = Boundary::<B>::build(&z, h, w, 1.0, 1.0, &device).expect("应当认出墙");
+
+        // 输出三通道 (P, Vx, Vy)，Vx 恒为 1 => 处处垂直穿墙，边界残差必然非零
+        let mut vals = vec![0.0f32; 3 * h * w];
+        for v in vals.iter_mut().skip(h * w).take(h * w) {
+            *v = 1.0;
+        }
+        let output = Tensor::<B, 1>::from_data(TensorData::from(vals.as_slice()), &device)
+            .reshape([1, 3, h, w]);
+        let target = Tensor::<B, 4>::zeros([1, 3, h, w], &device);
+
+        let base = PhysicsLoss::<B> {
+            task: Task::Flow,
+            channel_order: ChannelOrder::Pvv,
+            div_weight: 0.0,
+            ns_weight: 0.0,
+            smooth_weight: 0.0,
+            dx: 1.0,
+            dy: 1.0,
+            physics_warmup: 0.0,
+            boundary: Some(boundary),
+            ..Default::default()
+        };
+
+        let (t_off, p_off) = PhysicsLoss::<B> {
+            bc_weight: 0.0,
+            ..base.clone()
+        }
+        .compute(output.clone(), target.clone());
+        let (t_on, p_on) = PhysicsLoss::<B> {
+            bc_weight: 1.0,
+            ..base
+        }
+        .compute(output, target);
+
+        assert!(p_off.bc > 0.0, "残差本身应当非零，实得 {}", p_off.bc);
+        assert!(
+            (p_on.bc - p_off.bc).abs() < 1e-6,
+            "权重不该改变残差本身：{} vs {}",
+            p_off.bc,
+            p_on.bc
+        );
+        let delta = scalar(t_on) - scalar(t_off);
+        assert!(
+            delta > 1e-6,
+            "把 --bc-weight 从 0 提到 1，总损失必须变大；实得差 {}（说明边界项没进 total）",
+            delta
+        );
+        let _ = (p_off.total, p_on.total);
+    }
+
     /// 造一份只有残差分项有意义的 [`LossParts`]，权重与缩放不参与量级估计。
     fn parts_of(div: f64, ns: f64, advdiff: f64, smooth: f64) -> LossParts {
         LossParts {
@@ -767,15 +1109,18 @@ mod tests {
             ns,
             advdiff,
             smooth,
+            bc: 0.0,
             total: 0.0,
             w_div: 0.0,
             w_ns: 0.0,
             w_advdiff: 0.0,
             w_smooth: 0.0,
+            w_bc: 0.0,
             scale_div: 1.0,
             scale_ns: 1.0,
             scale_advdiff: 1.0,
             scale_smooth: 1.0,
+            scale_bc: 1.0,
         }
     }
 

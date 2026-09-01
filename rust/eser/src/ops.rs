@@ -100,6 +100,61 @@ pub fn laplacian<B: Backend>(field: Tensor<B, 4>, dx: f64, dy: f64) -> Tensor<B,
     lxx + lyy
 }
 
+// ============================================================ z 方向算子（三维）
+//
+// **这一段没有 Python 黄金数据可对**：Python 版根本没有三维物理，`golden.npz` 里
+// 也就没有 z 方向的参考张量。所以这里靠**解析场**验：给一个已知导数的场，看算子
+// 出来的数对不对，外加 O(h²) 收敛阶。
+//
+// x/y 方向一个字都没改：三维残差 = 现有 2D 代码（经 `flatten_depth` 逐层调用）
+// 加上这里的 z 项。这样 502 个冻结张量不可能漂移，也不会出现「测的那份和用的那份
+// 不是同一份代码」。
+
+/// 沿深度维 (dim 2) 的边缘复制填充，`pad` 层。
+///
+/// 与 [`replicate_pad_2d`] 同一套边界处理：域外用最外一层顶替。换成零填充会在
+/// 顶层/底层造出虚假的巨大梯度——地铁站的站厅层和站台层正好在这两端。
+pub fn replicate_pad_z<B: Backend>(x: Tensor<B, 5>, pad: usize) -> Tensor<B, 5> {
+    if pad == 0 {
+        return x;
+    }
+    let [b, c, d, h, w] = x.dims();
+    let first = x.clone().slice([0..b, 0..c, 0..1, 0..h, 0..w]);
+    let last = x.clone().slice([0..b, 0..c, d - 1..d, 0..h, 0..w]);
+    let mut parts = Vec::with_capacity(2 * pad + 1);
+    for _ in 0..pad {
+        parts.push(first.clone());
+    }
+    parts.push(x);
+    for _ in 0..pad {
+        parts.push(last.clone());
+    }
+    Tensor::cat(parts, 2)
+}
+
+/// 取深度方向的三段切片 `(前, 中, 后)`，都已按 replicate 补过边。
+fn z_stencil<B: Backend>(x: Tensor<B, 5>) -> (Tensor<B, 5>, Tensor<B, 5>, Tensor<B, 5>) {
+    let [b, c, d, h, w] = x.dims();
+    let p = replicate_pad_z(x, 1);
+    let take = |lo: usize| {
+        p.clone()
+            .slice([0..b, 0..c, lo..lo + d, 0..h, 0..w])
+    };
+    (take(0), take(1), take(2))
+}
+
+/// `∂/∂z` 中心差分。与 x/y 方向同一套模板（[-0.5, 0, 0.5]）与同一套边界处理。
+pub fn grad_z<B: Backend>(x: Tensor<B, 5>, dz: f64) -> Tensor<B, 5> {
+    let (back, _, front) = z_stencil(x);
+    (front - back).div_scalar(2.0 * dz)
+}
+
+/// `∂²/∂z²` 三点差分，用来补全三维 Laplacian。
+pub fn second_diff_z<B: Backend>(x: Tensor<B, 5>, dz: f64) -> Tensor<B, 5> {
+    let (back, mid, front) = z_stencil(x);
+    (front + back - mid.mul_scalar(2.0)).div_scalar(dz * dz)
+}
+
 /// 掩码内均值。分母是**掩码内像素数**，不是全图——否则损失会被域外的零值稀释。
 ///
 /// `mask` 为 `None` 时退化成普通 mean。掩码形状可与 `x` 广播。
@@ -164,4 +219,106 @@ fn constant_pad_2d<B: Backend>(x: Tensor<B, 4>, pad: usize, value: f32) -> Tenso
 
     let col = Tensor::<B, 4>::full([b, c, h + 2 * pad, pad], value, &device);
     Tensor::cat(vec![col.clone(), x, col], 3)
+}
+
+#[cfg(test)]
+mod z_tests {
+    use super::*;
+    use burn::backend::NdArray;
+    use burn::tensor::TensorData;
+
+    type B = NdArray<f32>;
+
+    /// 造一个 (1, 1, D, H, W) 的场，取值由 `f(z, y, x)` 给出（物理坐标）。
+    fn field(d: usize, h: usize, w: usize, dz: f64, f: impl Fn(f64) -> f64) -> Tensor<B, 5> {
+        let mut v = Vec::with_capacity(d * h * w);
+        for k in 0..d {
+            let val = f(k as f64 * dz) as f32;
+            for _ in 0..h * w {
+                v.push(val);
+            }
+        }
+        Tensor::<B, 1>::from_data(TensorData::from(v.as_slice()), &Default::default())
+            .reshape([1, 1, d, h, w])
+    }
+
+    /// 内层格点上取 `∂/∂z` 与 `∂²/∂z²` 的最大误差。边界层受 replicate 影响，另测。
+    fn interior_err(t: Tensor<B, 5>, d: usize, h: usize, w: usize, want: impl Fn(usize) -> f64) -> f64 {
+        let got = t.to_data().to_vec::<f32>().unwrap();
+        let mut e: f64 = 0.0;
+        for k in 1..d - 1 {
+            let g = got[k * h * w] as f64;
+            e = e.max((g - want(k)).abs());
+        }
+        e
+    }
+
+    #[test]
+    fn grad_z_is_exact_on_a_linear_field() {
+        // z 的线性函数：中心差分对它是精确的（截断误差项含二阶导，恒为 0）
+        let (d, h, w, dz) = (7usize, 3usize, 4usize, 0.25f64);
+        let x = field(d, h, w, dz, |z| 3.0 * z + 1.0);
+        let e = interior_err(grad_z(x, dz), d, h, w, |_| 3.0);
+        assert!(e < 1e-5, "线性场的 ∂/∂z 应当精确为 3，最大误差 {}", e);
+    }
+
+    #[test]
+    fn second_diff_z_is_exact_on_a_quadratic_field() {
+        let (d, h, w, dz) = (7usize, 3usize, 4usize, 0.25f64);
+        let x = field(d, h, w, dz, |z| 2.0 * z * z);
+        let e = interior_err(second_diff_z(x, dz), d, h, w, |_| 4.0);
+        assert!(e < 1e-4, "二次场的 ∂²/∂z² 应当精确为 4，最大误差 {}", e);
+    }
+
+    #[test]
+    fn grad_z_converges_at_second_order() {
+        // sin(z) 上把 dz 减半，误差应当降到约 1/4
+        let err = |d: usize| {
+            let dz = 1.0 / (d - 1) as f64;
+            let x = field(d, 2, 2, dz, |z| (z * 6.0).sin());
+            interior_err(grad_z(x, dz), d, 2, 2, |k| {
+                6.0 * (k as f64 * dz * 6.0).cos()
+            })
+        };
+        let (e1, e2) = (err(17), err(33));
+        let ratio = e1 / e2;
+        assert!(
+            (3.0..5.0).contains(&ratio),
+            "中心差分应当是二阶收敛（比值约 4），实得 {:.3}（{:.3e} -> {:.3e}）",
+            ratio,
+            e1,
+            e2
+        );
+    }
+
+    #[test]
+    fn replicate_padding_makes_the_boundary_slice_one_sided() {
+        // 顶层：back 被复制成自己，于是 ∂/∂z = (f[1] - f[0]) / (2 dz)，是单侧差分的一半。
+        // 这不是 bug 而是与 x/y 方向完全一致的边界口径——写下来免得有人以为算错了。
+        let (d, h, w, dz) = (5usize, 1usize, 1usize, 0.5f64);
+        let x = field(d, h, w, dz, |z| 3.0 * z);
+        let got = grad_z(x, dz).to_data().to_vec::<f32>().unwrap();
+        assert!(
+            (got[0] as f64 - 1.5).abs() < 1e-5,
+            "顶层应当是 (f[1]-f[0])/(2dz) = 1.5，实得 {}",
+            got[0]
+        );
+        assert!((got[2] as f64 - 3.0).abs() < 1e-5, "内层应当精确为 3");
+    }
+
+    #[test]
+    fn z_operators_ignore_variation_along_x_and_y() {
+        // 只沿 x 变化的场，z 方向导数必须处处为 0——搞混轴序是三维里最容易犯的错
+        let (d, h, w) = (4usize, 3usize, 5usize);
+        let v: Vec<f32> = (0..d * h * w).map(|i| (i % w) as f32).collect();
+        let x = Tensor::<B, 1>::from_data(TensorData::from(v.as_slice()), &Default::default())
+            .reshape([1, 1, d, h, w]);
+        for t in [grad_z(x.clone(), 0.3), second_diff_z(x, 0.3)] {
+            let m = t
+                .abs()
+                .max()
+                .into_scalar() as f64;
+            assert!(m < 1e-6, "沿 x 变化的场不应产生 z 方向导数，实得 {}", m);
+        }
+    }
 }
