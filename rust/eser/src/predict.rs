@@ -30,7 +30,9 @@ use burn::tensor::{Bool, Tensor, TensorData};
 use rust_hdf5::H5File;
 
 use crate::data::{denormalize, CfdDataset, OutputStats};
-use crate::geometry::{coverage, default_t_geometry, rect_mask, resample_raster, Segment};
+use crate::geometry::{
+    coverage, default_t_geometry, rect_mask, resample_raster_planes, Segment, Zone,
+};
 use crate::model::{DenseEd, DenseEdConfig};
 use crate::model3d::{DenseEd3d, DenseEd3dConfig};
 use crate::physics::ChannelOrder;
@@ -459,8 +461,19 @@ pub enum GeometrySpec {
     Default,
     /// 矩形段拼接（归一化比例）
     Segments(Vec<Segment>),
-    /// `.npy` 栅格（地铁站这类拼不出来的平面），会做最近邻重采样
-    Raster { mask: Vec<f32>, h: usize, w: usize },
+    /// `.npy` 栅格（地铁站这类拼不出来的平面），会做最近邻重采样。
+    ///
+    /// 存的是**分区标签**（见 [`Zone`]）而不是 0/1：只含 0/1 的旧文件里 1 就是流体，
+    /// [`Self::mask`] 的输出与从前逐位相同。
+    ///
+    /// `d` 是深度层数：2D 的 `.npy` 给 1，3D 的 `(D, H, W)` 给 D。逐层可以不一样——
+    /// 地铁站的站厅层和站台层轮廓本来就不同，这正是三维掩码存在的理由。
+    Raster {
+        mask: Vec<f32>,
+        d: usize,
+        h: usize,
+        w: usize,
+    },
 }
 
 impl GeometrySpec {
@@ -477,8 +490,8 @@ impl GeometrySpec {
             Some(s) => s.trim().to_string(),
         };
         if text.to_ascii_lowercase().ends_with(".npy") {
-            let (mask, h, w) = read_npy_2d(Path::new(&text))?;
-            return Ok(Self::Raster { mask, h, w });
+            let (mask, d, h, w) = read_npy_mask(Path::new(&text))?;
+            return Ok(Self::Raster { mask, d, h, w });
         }
         let body = if text.starts_with('{') {
             text
@@ -517,12 +530,45 @@ impl GeometrySpec {
         Ok(Self::Segments(segments))
     }
 
-    /// 生成 (h, w) 的 0/1 掩码，行优先展平。对应 `geometry.t_mask_numpy`。
+    /// 生成 (h, w) 的 **0/1 计算域掩码**，行优先展平。对应 `geometry.t_mask_numpy`。
+    ///
+    /// 分区栅格里只有 [`Zone::Fluid`] 算域内——墙和风口是边界，不是计算域。
     pub fn mask(&self, h: usize, w: usize) -> Result<Vec<f32>, String> {
         match self {
             Self::Default => rect_mask(h, w, &default_t_geometry()),
             Self::Segments(s) => rect_mask(h, w, s),
-            Self::Raster { mask, h: sh, w: sw } => resample_raster(mask, *sh, *sw, h, w),
+            Self::Raster { .. } => {
+                let z = self.zones(h, w)?.expect("Raster 一定有分区标签");
+                Ok(z.iter()
+                    .map(|&v| if v == Zone::Fluid.label() { 1.0 } else { 0.0 })
+                    .collect())
+            }
+        }
+    }
+
+    /// 掩码的深度层数。非栅格几何恒为 1。
+    pub fn depth(&self) -> usize {
+        match self {
+            Self::Raster { d, .. } => *d,
+            _ => 1,
+        }
+    }
+
+    /// 生成 (h, w) 的**分区标签场**。矩形段与缺省几何没有边界信息，返回 `None`。
+    ///
+    /// 三维栅格返回 `d * h * w` 个标签，按 `(层, 行, 列)` 行优先排列。
+    ///
+    /// 返回 `None` 而不是「全流体」的标签场：前者能让上层明确报出「这个几何给不了
+    /// 边界条件」，后者会让边界残差项静默地一条都加不上却看起来配置成功了。
+    pub fn zones(&self, h: usize, w: usize) -> Result<Option<Vec<f32>>, String> {
+        match self {
+            Self::Default | Self::Segments(_) => Ok(None),
+            Self::Raster {
+                mask,
+                d,
+                h: sh,
+                w: sw,
+            } => Ok(Some(resample_raster_planes(mask, *d, *sh, *sw, h, w)?)),
         }
     }
 }
@@ -532,7 +578,7 @@ impl GeometrySpec {
 /// 自己解析而不是引依赖：`ndarray-npy` 只在 dev-dependencies 里（测试用），而
 /// `Cargo.toml` 不在 P6 的改动范围内。格式本身很简单——魔数、头长度、一行 Python
 /// 字典字面量，然后是裸数据。
-fn read_npy_2d(path: &Path) -> Result<(Vec<f32>, usize, usize), String> {
+fn read_npy_mask(path: &Path) -> Result<(Vec<f32>, usize, usize, usize), String> {
     let raw = std::fs::read(path).map_err(|e| format!("读不了栅格掩码 {:?}: {}", path, e))?;
     if raw.len() < 10 || &raw[..6] != b"\x93NUMPY" {
         return Err(format!("{:?} 不是 .npy 文件（魔数不符）", path));
@@ -571,15 +617,18 @@ fn read_npy_2d(path: &Path) -> Result<(Vec<f32>, usize, usize), String> {
                 .map_err(|e| format!("shape 解析失败: {}", e))
         })
         .collect::<Result<_, _>>()?;
-    if dims.len() != 2 {
-        return Err(format!(
-            "栅格掩码必须是 2D (H, W)，{:?} 的形状是 {:?}",
-            path, dims
-        ));
-    }
-    let (h, w) = (dims[0], dims[1]);
+    let (d, h, w) = match dims.len() {
+        2 => (1usize, dims[0], dims[1]),
+        3 => (dims[0], dims[1], dims[2]),
+        _ => {
+            return Err(format!(
+                "栅格掩码必须是 2D (H, W) 或 3D (D, H, W)，{:?} 的形状是 {:?}",
+                path, dims
+            ))
+        }
+    };
     let body = &raw[head_end..];
-    let n = h * w;
+    let n = d * h * w;
 
     // 字节序：'<' 小端、'|' 单字节无所谓；大端读出来是垃圾数值而不是报错，必须挡住
     let item = |size: usize| -> Result<(), String> {
@@ -643,7 +692,7 @@ fn read_npy_2d(path: &Path) -> Result<(Vec<f32>, usize, usize), String> {
             ))
         }
     };
-    Ok((data, h, w))
+    Ok((data, d, h, w))
 }
 
 fn between(text: &str, start: &str, end: &str) -> Option<String> {
@@ -1560,6 +1609,53 @@ mod tests {
         );
     }
 
+    /// 分区栅格的**计算域掩码只能是流体**，墙和风口都不算域内。
+    ///
+    /// 把边界标签一并当成域内（`v > 0`）是最容易顺手写出的版本，而且不报错：
+    /// 覆盖率变大一点，物理残差跑到墙上去算——`erode_mask` 只收缩一格，收不掉
+    /// 整堵墙。这条测试就是拦这个的。
+    #[test]
+    fn zoned_raster_counts_only_fluid_as_domain() {
+        // 3x3：中间一个流体，四邻是墙，四角域外
+        let zones = vec![0.0, 2.0, 0.0, 2.0, 1.0, 2.0, 0.0, 2.0, 0.0];
+        let spec = GeometrySpec::Raster {
+            mask: zones.clone(),
+            d: 1,
+            h: 3,
+            w: 3,
+        };
+
+        let mask = spec.mask(3, 3).expect("生成掩码失败");
+        assert_eq!(
+            mask,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            "只有标签 1 的格点算计算域；墙被算进去的话残差会跑到墙上"
+        );
+        assert!(
+            (coverage(&mask) - 1.0 / 9.0).abs() < 1e-9,
+            "覆盖率应当只按流体算"
+        );
+
+        // 分区标签本身要原样取得到，边界项靠它建几何
+        assert_eq!(spec.zones(3, 3).unwrap().as_deref(), Some(&zones[..]));
+
+        // 矩形段与缺省几何没有边界信息，必须是 None 而不是「全流体」
+        assert!(GeometrySpec::Default.zones(8, 8).unwrap().is_none());
+    }
+
+    /// 只含 0/1 的旧掩码：`mask()` 必须逐位不变，`zones()` 认不出任何边界。
+    #[test]
+    fn legacy_binary_raster_is_bit_identical() {
+        let bits = vec![0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0];
+        let spec = GeometrySpec::Raster {
+            mask: bits.clone(),
+            d: 1,
+            h: 3,
+            w: 3,
+        };
+        assert_eq!(spec.mask(3, 3).unwrap(), bits, "旧的 0/1 掩码语义不能变");
+    }
+
     #[test]
     fn default_geometry_matches_the_t_pipe() {
         // 137x137 是设计分辨率，覆盖率应当就是方案里那个 44.9%
@@ -1665,7 +1761,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let bad = dir.join("not.npy");
         std::fs::write(&bad, b"just some text, definitely not numpy").unwrap();
-        assert!(read_npy_2d(&bad).is_err());
+        assert!(read_npy_mask(&bad).is_err());
 
         // 手工拼一个合法的 2x3 f4 v1 头，验证正常路径
         let good = dir.join("ok.npy");
@@ -1682,10 +1778,81 @@ mod tests {
             bytes.extend(v.to_le_bytes());
         }
         std::fs::write(&good, &bytes).unwrap();
-        let (data, h, w) = read_npy_2d(&good).unwrap();
-        assert_eq!((h, w), (2, 3));
+        let (data, d, h, w) = read_npy_mask(&good).unwrap();
+        assert_eq!((d, h, w), (1, 2, 3), "二维 .npy 的层数应当报成 1");
         assert_eq!(data, vec![0.0, 1.0, 0.0, 1.0, 1.0, 0.0]);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 三维 `.npy` (D, H, W)：层数要读对，逐层数据不能串。
+    #[test]
+    fn npy_reader_handles_three_dimensional_masks() {
+        let dir = std::env::temp_dir().join(format!("eser_p6_npy3_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("z.npy");
+        // (2, 2, 3)：第 0 层全 1（流体），第 1 层全 2（壁）
+        let header = "{'descr': '<f4', 'fortran_order': False, 'shape': (2, 2, 3), }";
+        let mut padded = header.to_string();
+        while !(10 + padded.len() + 1).is_multiple_of(64) {
+            padded.push(' ');
+        }
+        padded.push('\n');
+        let mut bytes = b"\x93NUMPY\x01\x00".to_vec();
+        bytes.extend((padded.len() as u16).to_le_bytes());
+        bytes.extend(padded.as_bytes());
+        for k in 0..2u32 {
+            for _ in 0..6 {
+                bytes.extend((k as f32 + 1.0).to_le_bytes());
+            }
+        }
+        std::fs::write(&p, &bytes).unwrap();
+
+        let (data, d, h, w) = read_npy_mask(&p).unwrap();
+        assert_eq!((d, h, w), (2, 2, 3));
+        assert_eq!(&data[..6], &[1.0f32; 6], "第 0 层应当全是流体");
+        assert_eq!(&data[6..], &[2.0f32; 6], "第 1 层应当全是壁");
+
+        // 逐层重采样：层数不动，每层各自变形
+        let spec = GeometrySpec::Raster {
+            mask: data,
+            d,
+            h,
+            w,
+        };
+        assert_eq!(spec.depth(), 2);
+        let z = spec.zones(4, 6).unwrap().unwrap();
+        assert_eq!(z.len(), 2 * 4 * 6, "重采样后层数必须不变");
+        assert!(z[..24].iter().all(|v| *v == 1.0), "第 0 层仍应全是流体");
+        assert!(z[24..].iter().all(|v| *v == 2.0), "第 1 层仍应全是壁");
+
+        // 计算域掩码只取流体：第 1 层整层是墙，一个域内格点都不该有
+        let m = spec.mask(4, 6).unwrap();
+        assert!(m[..24].iter().all(|v| *v == 1.0));
+        assert!(m[24..].iter().all(|v| *v == 0.0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 4D 之类的形状要报错，而不是按前两维乱切。
+    #[test]
+    fn npy_reader_rejects_unsupported_rank() {
+        let dir = std::env::temp_dir().join(format!("eser_p6_npy4_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("four.npy");
+        let header = "{'descr': '<f4', 'fortran_order': False, 'shape': (2, 2, 2, 2), }";
+        let mut padded = header.to_string();
+        while !(10 + padded.len() + 1).is_multiple_of(64) {
+            padded.push(' ');
+        }
+        padded.push('\n');
+        let mut bytes = b"\x93NUMPY\x01\x00".to_vec();
+        bytes.extend((padded.len() as u16).to_le_bytes());
+        bytes.extend(padded.as_bytes());
+        bytes.extend(std::iter::repeat_n(0u8, 16 * 4));
+        std::fs::write(&p, &bytes).unwrap();
+        let e = read_npy_mask(&p).unwrap_err();
+        assert!(e.contains("2D") || e.contains("3D"), "报错要说清支持哪些形状：{}", e);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
